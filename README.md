@@ -42,8 +42,10 @@ HTMLoom is a self-contained Figma plugin. It loads HTML in its own sandboxed ifr
 
 **Phase 5 — Authoring polish.** The last sharp edges, smoothed:
 
-- Inline `<svg>` and `background-image: url(*.svg)` are rasterised to PNG
-  in the UI iframe before reaching Figma — icons round-trip cleanly
+- Inline `<svg>` is imported as native editable Figma vectors via
+  `figma.createNodeFromSvgAsync` (no rasterisation, infinite zoom);
+  `currentColor` is resolved before serialisation so icon strokes keep
+  their on-page colour
 - Linear gradients now respect aspect ratio: a 45° gradient on a wide
   rectangle reads as 45° on screen
 - `text-decoration` propagates through nested inline runs
@@ -56,7 +58,23 @@ HTMLoom is a self-contained Figma plugin. It loads HTML in its own sandboxed ifr
   attribute overrides the auto-binder and pins a paint to a Variable by
   name regardless of computed value
 
-Phase 6 (SVG `currentColor` resolution, layout-field bindings) is tracked in `docs/ROADMAP.md`.
+**Phase 6 — Responsiveness.** Imported frames now resize the way the source HTML would:
+
+- Per-axis sizing inferred from CSS: `FIXED` / `HUG` / `FILL`. Inline
+  elements HUG; `flex-grow > 0` FILLs the primary axis;
+  `align-self: stretch` (or default `align-items: stretch`) FILLs the
+  cross axis; block-level whose measured width matches the parent
+  content box FILLs horizontally; everything else HUGs.
+- `min/max-width/height`, `flex-grow → layoutGrow`,
+  `align-self: stretch → layoutAlign: STRETCH`,
+  `flex-wrap → layoutWrap: WRAP` are all bridged.
+- `position: absolute` children get Figma constraints from
+  `top/right/bottom/left`. The `left: 50%; transform: translateX(-50%)`
+  centring idiom maps to `CENTER` (not `STRETCH`).
+- Override per element with `data-figma-sizing-h="fill|hug|fixed"` and
+  `data-figma-sizing-v="…"` when the heuristic guesses wrong.
+
+Phase 7 (multi-track grid, layout-field Variable bindings, easing presets) is tracked in `docs/ROADMAP.md`.
 
 ### Authoring API
 
@@ -91,6 +109,18 @@ prototype and it just works.
 
 Useful when several tokens share a value (so the auto-binder can't pick deterministically) or when the literal CSS colour shouldn't constrain the binding.
 
+**Sizing overrides (Phase 6):**
+
+```html
+<!-- Force this card to FILL its parent regardless of measured width -->
+<div class="card" data-figma-sizing-h="fill">…</div>
+
+<!-- Override the auto-detected HUG to a fixed-width sidebar -->
+<aside data-figma-sizing-h="fixed" data-figma-sizing-v="fill">…</aside>
+```
+
+The override wins the heuristic. Useful for CMS-driven content whose rendered width happens to coincide with the parent content box (and would otherwise be classified as `FILL`).
+
 ## Develop
 
 ```bash
@@ -107,7 +137,7 @@ In Figma desktop:
 
 ## Try it
 
-The repo ships five examples used during development:
+The repo ships seven examples used during development:
 
 ```
 examples/alert-priority-wireframe.html   # Phase 1 — static layout
@@ -115,9 +145,11 @@ examples/popover-states.html             # Phase 2 — interactive variants
 examples/styled-card.html                # Phase 3 — gradients, shadows, runs
 examples/tokens-radial.html              # Phase 4 — tokens, radial, bg-url, nested
 examples/phase5-fidelity.html            # Phase 5 — SVG, <pre>, gradient, overrides
+examples/responsive-card.html            # Phase 6 — HUG/FILL/FIXED, wrap, full-width
+examples/responsive-grid.html            # Phase 6 — flex-wrap tile grid that reflows
 ```
 
-Drop either onto the plugin window to verify your local build.
+Drop any of them onto the plugin window to verify your local build. For Phase 6, after import, drag the resulting frame's right edge in Figma — `responsive-grid.html` should reflow tiles from 4-up to 1-up just like the browser does.
 
 ## Architecture (one paragraph)
 

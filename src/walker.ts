@@ -8,7 +8,9 @@
  */
 
 import type {
+  AbsoluteAnchors,
   AutoLayoutHint,
+  AxisSizing,
   BoxModel,
   CaptureResult,
   CapturedNode,
@@ -20,6 +22,7 @@ import type {
   Padding,
   RGBA,
   Shadow,
+  SizingIntent,
   TextDecoration,
   TextRun,
   TextStyle,
@@ -246,6 +249,13 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
   const style = window.getComputedStyle(el);
   if (style.display === "none" || style.visibility === "hidden") return null;
 
+  // The recursion passes the immediate parent in `root` (the parameter is
+  // misnamed for historical reasons — see Phase 2 hotfix). Treat the
+  // topmost call (where `el === root`) as having no parent so sizing
+  // inference doesn't mis-classify the document body.
+  const parent = el === root ? null : root;
+  const parentStyle = parent ? window.getComputedStyle(parent) : null;
+
   const rect = el.getBoundingClientRect();
   const rootRect = root.getBoundingClientRect();
 
@@ -325,6 +335,7 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     component: componentName ? captureComponent(el, componentName, path) : null,
     triggers: parseTriggers(el),
     tokenBindings: parseTokenBindings(el),
+    sizing: extractSizingIntent(el, style, parent, parentStyle),
   };
 
   if (isDecoratedTextLeaf && !componentName) {
@@ -379,6 +390,25 @@ function synthesizeTextChild(
     // Decorated text leaves can carry `data-figma-token-text` on the parent;
     // forward it so the synthesised TEXT child can bind its fill.
     tokenBindings: { background: null, text: inheritedTextToken, border: null },
+    // The synthesised text inherits HUG sizing — it's the inner span of a
+    // badge / button and should fit its characters, never grow beyond them.
+    sizing: defaultSizingIntent("HUG", "HUG"),
+  };
+}
+
+/** Convenience constructor used for synthesised nodes (no DOM source). */
+function defaultSizingIntent(widthMode: AxisSizing, heightMode: AxisSizing): SizingIntent {
+  return {
+    widthMode,
+    heightMode,
+    minWidth: null,
+    maxWidth: null,
+    minHeight: null,
+    maxHeight: null,
+    flexGrow: 0,
+    flexWrap: false,
+    alignSelfStretch: false,
+    absoluteAnchors: null,
   };
 }
 
@@ -1144,4 +1174,264 @@ function mapAlign(v: string): AutoLayoutHint["cross"] {
     default:
       return "MIN";
   }
+}
+
+/* ---------- Sizing intent (Phase 6) ---------- */
+
+/**
+ * Derives FIXED / HUG / FILL per axis plus min/max, flex-grow, wrap and
+ * absolute anchors. Strategy: explicit `data-figma-sizing-h/v` overrides
+ * always win; otherwise we combine the element's own display + position
+ * + width/height intent with the parent's auto-layout context.
+ *
+ * Heuristic philosophy (hybrid + aggressive — see Phase 6 plan):
+ *   - inline / inline-block      → HUG
+ *   - position: absolute / fixed → FIXED (constraints handle anchoring)
+ *   - flex child with grow > 0   → FILL on the parent's main axis
+ *   - flex child + cross-axis stretch (explicit or default) and no
+ *     declared cross size → FILL on the cross axis
+ *   - block-level whose measured width matches the parent's content box
+ *     within a 1px slack → FILL (default block fills its container)
+ *   - block-level otherwise → HUG horizontally if content-sized, FIXED
+ *     when an explicit width is detected
+ *   - vertical default for blocks → HUG (CSS height: auto)
+ *
+ * The measured-fill-vs-parent check is what catches `width: 100%`,
+ * `width: auto + display: block`, and `flex: 1 1 auto` without us having
+ * to parse the original CSS source — the browser already resolved them.
+ */
+function extractSizingIntent(
+  el: HTMLElement,
+  style: CSSStyleDeclaration,
+  parent: HTMLElement | null,
+  parentStyle: CSSStyleDeclaration | null,
+): SizingIntent {
+  const overrideH = parseSizingOverride(el.getAttribute("data-figma-sizing-h"));
+  const overrideV = parseSizingOverride(el.getAttribute("data-figma-sizing-v"));
+
+  const minWidth = parsePxOrNull(style.minWidth);
+  const maxWidth = parsePxOrNull(style.maxWidth);
+  const minHeight = parsePxOrNull(style.minHeight);
+  const maxHeight = parsePxOrNull(style.maxHeight);
+
+  const flexGrow = parseFloat(style.flexGrow || "0") || 0;
+  const flexWrap = style.flexWrap === "wrap" || style.flexWrap === "wrap-reverse";
+  const alignSelfStretch = style.alignSelf === "stretch";
+
+  const position = style.position;
+  const isAbsolute = position === "absolute" || position === "fixed";
+  const absoluteAnchors = isAbsolute ? extractAbsoluteAnchors(el, style) : null;
+
+  const widthMode = overrideH ?? inferAxisMode(el, style, parent, parentStyle, "horizontal");
+  const heightMode = overrideV ?? inferAxisMode(el, style, parent, parentStyle, "vertical");
+
+  return {
+    widthMode,
+    heightMode,
+    minWidth,
+    maxWidth,
+    minHeight,
+    maxHeight,
+    flexGrow,
+    flexWrap,
+    alignSelfStretch,
+    absoluteAnchors,
+  };
+}
+
+function parseSizingOverride(value: string | null): AxisSizing | null {
+  if (!value) return null;
+  const v = value.trim().toLowerCase();
+  if (v === "fill" || v === "fill_container") return "FILL";
+  if (v === "hug" || v === "hug_contents") return "HUG";
+  if (v === "fixed") return "FIXED";
+  return null;
+}
+
+function parsePxOrNull(value: string): number | null {
+  if (!value || value === "none" || value === "auto" || value === "normal") return null;
+  const n = parseFloat(value);
+  if (!isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+function inferAxisMode(
+  el: HTMLElement,
+  style: CSSStyleDeclaration,
+  parent: HTMLElement | null,
+  parentStyle: CSSStyleDeclaration | null,
+  axis: "horizontal" | "vertical",
+): AxisSizing {
+  const display = style.display;
+  const position = style.position;
+
+  // Absolute / fixed elements keep their captured size; constraints handle
+  // anchoring. This is the only safe default — FILL would require knowing
+  // both edges and a stretching parent.
+  if (position === "absolute" || position === "fixed") return "FIXED";
+
+  // Inline-level elements size to content on both axes.
+  if (
+    display === "inline" ||
+    display === "inline-block" ||
+    display === "inline-flex" ||
+    display === "inline-grid" ||
+    display === "contents"
+  ) {
+    return "HUG";
+  }
+
+  // SVG / IMG without an explicit dimension on the requested axis → FIXED
+  // (their intrinsic aspect-ratio is captured in the box and we don't want
+  // HUG to distort them).
+  if (el.tagName === "IMG" || el.tagName === "SVG" || el.tagName === "svg") {
+    return "FIXED";
+  }
+
+  const parentLayoutIsFlex =
+    parentStyle?.display === "flex" || parentStyle?.display === "inline-flex";
+  const parentDir =
+    parentLayoutIsFlex && parentStyle
+      ? (parentStyle.flexDirection || "row").startsWith("column")
+        ? "column"
+        : "row"
+      : null;
+  // "Primary" axis is the parent flex direction; "cross" is its perpendicular.
+  const isPrimary =
+    parentDir &&
+    ((axis === "horizontal" && parentDir === "row") ||
+      (axis === "vertical" && parentDir === "column"));
+  const isCross = parentDir && !isPrimary;
+
+  // Primary axis with flex-grow > 0 → FILL. Most common responsive signal.
+  const flexGrow = parseFloat(style.flexGrow || "0") || 0;
+  if (parentLayoutIsFlex && isPrimary && flexGrow > 0) return "FILL";
+
+  // Cross-axis stretch (explicit `align-self: stretch` OR parent's default
+  // `align-items: stretch`) with no declared cross size → FILL.
+  if (parentLayoutIsFlex && isCross) {
+    const align = parentStyle!.alignItems || "stretch";
+    const elAlign = style.alignSelf;
+    const stretches =
+      elAlign === "stretch" ||
+      (elAlign === "auto" && (align === "stretch" || align === "normal"));
+    if (stretches && !axisHasExplicitSize(style, axis)) return "FILL";
+  }
+
+  // Block / flex / grid containers: FILL when measured width matches the
+  // parent's content area; HUG vertically by default (CSS `height: auto`).
+  if (
+    display === "block" ||
+    display === "flex" ||
+    display === "grid" ||
+    display === "list-item" ||
+    display === "flow-root" ||
+    display === "table"
+  ) {
+    if (axis === "horizontal") {
+      if (parent && parentStyle && fillsParentContentBox(el, parent, parentStyle, "width")) {
+        return "FILL";
+      }
+      return axisHasExplicitSize(style, "horizontal") ? "FIXED" : "HUG";
+    }
+    // Vertical: CSS height defaults to auto → HUG. FIXED only when an
+    // explicit height was declared.
+    return axisHasExplicitSize(style, "vertical") ? "FIXED" : "HUG";
+  }
+
+  return "FIXED";
+}
+
+/**
+ * `getComputedStyle().width` always returns px, so we infer "explicit
+ * width was declared" by checking the inline style first and then by
+ * comparing computed width to the natural fit. Imperfect, but combined
+ * with the fill-vs-parent check it covers the vast majority of authored
+ * CSS without misclassification.
+ */
+function axisHasExplicitSize(style: CSSStyleDeclaration, axis: "horizontal" | "vertical"): boolean {
+  if (axis === "horizontal") {
+    if (style.maxWidth && style.maxWidth !== "none") return true;
+    if (style.minWidth && style.minWidth !== "0px" && style.minWidth !== "auto") return true;
+    // Width is "auto" on default block elements; any concrete px hints at
+    // an authored width or `flex-basis`. We treat both as FIXED candidates.
+    return style.width !== "auto" && style.width !== "" && !style.width.endsWith("%");
+  }
+  if (style.maxHeight && style.maxHeight !== "none") return true;
+  if (style.minHeight && style.minHeight !== "0px" && style.minHeight !== "auto") return true;
+  return style.height !== "auto" && style.height !== "" && !style.height.endsWith("%");
+}
+
+/**
+ * True when the element's measured size on the given axis matches the
+ * parent's content box (within 1px tolerance to absorb sub-pixel rounding).
+ * This is the fingerprint of `width: 100%` / `width: auto + display:
+ * block` / `align-self: stretch` etc., regardless of how it was authored.
+ */
+function fillsParentContentBox(
+  el: HTMLElement,
+  parent: HTMLElement,
+  parentStyle: CSSStyleDeclaration,
+  axis: "width" | "height",
+): boolean {
+  const parentRect = parent.getBoundingClientRect();
+  const elRect = el.getBoundingClientRect();
+  if (axis === "width") {
+    const contentW =
+      parentRect.width -
+      parsePx(parentStyle.paddingLeft) -
+      parsePx(parentStyle.paddingRight) -
+      parsePx(parentStyle.borderLeftWidth) -
+      parsePx(parentStyle.borderRightWidth);
+    return Math.abs(elRect.width - contentW) <= 1;
+  }
+  const contentH =
+    parentRect.height -
+    parsePx(parentStyle.paddingTop) -
+    parsePx(parentStyle.paddingBottom) -
+    parsePx(parentStyle.borderTopWidth) -
+    parsePx(parentStyle.borderBottomWidth);
+  return Math.abs(elRect.height - contentH) <= 1;
+}
+
+/**
+ * Reads CSS positional offsets (`top` / `right` / `bottom` / `left`) for
+ * an absolutely-positioned element. Also detects the "stay centred"
+ * pattern `left: 50%; transform: translate(-50%, ...)` and surfaces it
+ * via `centerH` / `centerV` so the builder can pick CENTER constraints
+ * instead of LEFT_RIGHT (which would stretch the node).
+ */
+function extractAbsoluteAnchors(el: HTMLElement, style: CSSStyleDeclaration): AbsoluteAnchors {
+  const top = parsePxOrNull(style.top);
+  const right = parsePxOrNull(style.right);
+  const bottom = parsePxOrNull(style.bottom);
+  const left = parsePxOrNull(style.left);
+
+  // `transform: translate(-50%, -50%)` (or single-axis variants) is the
+  // canonical way to "centre on this percentage anchor" in CSS. We detect
+  // it from the matrix Stylesheet exposes — `matrix(a, b, c, d, tx, ty)`
+  // — by checking whether the negative tx / ty equals half the element's
+  // measured size.
+  const transform = style.transform;
+  let centerH = false;
+  let centerV = false;
+  if (transform && transform !== "none") {
+    const m = transform.match(/matrix\(([^)]+)\)/);
+    if (m) {
+      const parts = m[1].split(",").map((s) => parseFloat(s.trim()));
+      if (parts.length === 6) {
+        const tx = parts[4];
+        const ty = parts[5];
+        const rect = el.getBoundingClientRect();
+        const halfW = rect.width / 2;
+        const halfH = rect.height / 2;
+        // Negative tx of ~half-width combined with a percentage anchor is
+        // the centre-on-x pattern; same logic for vertical.
+        if (left !== null && Math.abs(tx + halfW) <= 1 && tx < 0) centerH = true;
+        if (top !== null && Math.abs(ty + halfH) <= 1 && ty < 0) centerV = true;
+      }
+    }
+  }
+
+  return { top, right, bottom, left, centerH, centerV };
 }

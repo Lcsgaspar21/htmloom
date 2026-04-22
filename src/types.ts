@@ -188,6 +188,14 @@ export interface CapturedNode {
   triggers: TriggerSpec[];
   /** Explicit `data-figma-token-*` overrides; `null` fields fall back to the auto-binder. */
   tokenBindings: TokenBindings;
+  /**
+   * Sizing intent (FIXED / HUG / FILL per axis) plus min/max, flex-grow,
+   * wrap, and absolute-anchor data. The builder uses these to emit
+   * Figma's modern `layoutSizingHorizontal/Vertical`, `layoutGrow`,
+   * `layoutAlign`, `layoutWrap`, `min/maxWidth/Height`, and `constraints`
+   * properties so the imported tree resizes the way the source CSS would.
+   */
+  sizing: SizingIntent;
 }
 
 export type TokenKind = "COLOR" | "NUMBER" | "STRING" | "SKIP";
@@ -224,6 +232,69 @@ export interface TokenBindings {
   background: string | null;
   text: string | null;
   border: string | null;
+}
+
+/**
+ * Per-axis sizing mode for the imported Figma node.
+ *
+ * - `FIXED` — keep the captured pixel size; never reflows.
+ * - `HUG`   — wrap to children (Figma's "Hug contents"). For containers
+ *             with auto-layout this becomes `primary/counterAxisSizingMode
+ *             = AUTO`. For text it maps to `WIDTH_AND_HEIGHT` resize.
+ * - `FILL`  — stretch to fill the parent's available axis (`layoutSizing*
+ *             = "FILL"` plus `layoutGrow = 1` on the primary axis when
+ *             relevant). Requires the parent to have auto-layout.
+ */
+export type AxisSizing = "FIXED" | "HUG" | "FILL";
+
+/**
+ * Constraints for an absolutely-positioned child relative to its
+ * positioned ancestor. Each axis is a tuple `[start, end]` in CSS pixels;
+ * `null` means the corresponding edge was not declared, which Figma maps
+ * to a single-edge constraint (LEFT-only, RIGHT-only, etc.).
+ *
+ * `centerH` / `centerV` flag the common `left: 50%; transform:
+ * translateX(-50%)` centering pattern so the builder can emit a CENTER
+ * constraint instead of LEFT_RIGHT.
+ */
+export interface AbsoluteAnchors {
+  top: number | null;
+  right: number | null;
+  bottom: number | null;
+  left: number | null;
+  centerH: boolean;
+  centerV: boolean;
+}
+
+/**
+ * Sizing intent extracted from CSS (or `data-figma-sizing-h/v` overrides).
+ * Decoupled from `BoxModel` so the captured pixel rect remains the
+ * fallback for `FIXED` axes while responsive intent drives auto-layout
+ * sizing.
+ */
+export interface SizingIntent {
+  widthMode: AxisSizing;
+  heightMode: AxisSizing;
+  /** CSS `min-width` in pixels when explicitly declared. */
+  minWidth: number | null;
+  maxWidth: number | null;
+  minHeight: number | null;
+  maxHeight: number | null;
+  /** CSS `flex-grow`. Maps to Figma's `layoutGrow` on the primary axis. */
+  flexGrow: number;
+  /** True when the source CSS sets `flex-wrap: wrap` (or `wrap-reverse`). */
+  flexWrap: boolean;
+  /**
+   * `align-self: stretch` makes the child fill the cross axis of its
+   * auto-layout parent. Captured separately because it overrides the
+   * parent's `align-items`.
+   */
+  alignSelfStretch: boolean;
+  /**
+   * Set when `position: absolute | fixed` — the builder uses these edges
+   * to pick Figma constraints. `null` keeps the default LEFT/TOP.
+   */
+  absoluteAnchors: AbsoluteAnchors | null;
 }
 
 export interface CaptureResult {

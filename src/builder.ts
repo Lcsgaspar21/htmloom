@@ -7,6 +7,7 @@
 
 import type {
   AutoLayoutHint,
+  AxisSizing,
   CaptureResult,
   CapturedNode,
   ComponentSpec,
@@ -14,6 +15,7 @@ import type {
   Gradient,
   RGBA,
   Shadow,
+  SizingIntent,
   TextRun,
   TextStyle,
   TriggerEvent,
@@ -157,9 +159,21 @@ async function buildFrame(
     frame.paddingRight = node.padding.right;
     frame.paddingBottom = node.padding.bottom;
     frame.paddingLeft = node.padding.left;
+    // Default to FIXED — the child loop and applyContainerOwnSizing below
+    // promote axes to HUG / FILL based on the captured sizing intent.
     frame.primaryAxisSizingMode = "FIXED";
     frame.counterAxisSizingMode = "FIXED";
+    // Wrap is only meaningful on horizontal flex containers.
+    if (node.sizing.flexWrap && node.layout.mode === "HORIZONTAL") {
+      try {
+        (frame as unknown as { layoutWrap: "NO_WRAP" | "WRAP" }).layoutWrap = "WRAP";
+      } catch {
+        // Older Figma runtimes ignore layoutWrap — silently skip.
+      }
+    }
   }
+
+  applyMinMax(frame, node.sizing);
 
   for (const child of node.children) {
     const built = await createNodeFor(child, false, ctx);
@@ -167,13 +181,43 @@ async function buildFrame(
     // Components and ComponentSets sit on top of an auto-layout parent with
     // absolute positioning so their natural size doesn't distort siblings.
     const isComponentLike = built.type === "COMPONENT" || built.type === "COMPONENT_SET";
-    if (!useAutoLayout || isComponentLike) {
-      if (useAutoLayout && isComponentLike && "layoutPositioning" in built) {
+    const isAbsoluteAnchored = child.sizing.absoluteAnchors !== null;
+
+    if (isComponentLike) {
+      if (useAutoLayout && "layoutPositioning" in built) {
         (built as unknown as { layoutPositioning: "AUTO" | "ABSOLUTE" }).layoutPositioning = "ABSOLUTE";
       }
       built.x = child.box.x;
       built.y = child.box.y;
+    } else if (useAutoLayout && isAbsoluteAnchored) {
+      // CSS `position: absolute` inside an auto-layout container — opt out
+      // of the layout flow so the child stays anchored to a corner /
+      // centre regardless of sibling reflow.
+      if ("layoutPositioning" in built) {
+        (built as unknown as { layoutPositioning: "AUTO" | "ABSOLUTE" }).layoutPositioning = "ABSOLUTE";
+      }
+      built.x = child.box.x;
+      built.y = child.box.y;
+      applyConstraints(built, child);
+      applyMinMax(built, child.sizing);
+    } else if (useAutoLayout) {
+      // Regular auto-layout flow child: apply modern responsive sizing.
+      applyChildSizing(built, child);
+      applyMinMax(built, child.sizing);
+    } else {
+      built.x = child.box.x;
+      built.y = child.box.y;
+      applyConstraints(built, child);
+      applyMinMax(built, child.sizing);
     }
+  }
+
+  if (useAutoLayout) {
+    // FILL on this container is handled by the PARENT's loop (it needs a
+    // parent with auto-layout). HUG, however, is intrinsic to the AL
+    // container itself — applied here so single-pass HUG works even when
+    // the root is built standalone.
+    applyContainerOwnHug(frame, node);
   }
 
   if (isRoot) {
@@ -181,6 +225,157 @@ async function buildFrame(
     frame.y = 0;
   }
   return frame;
+}
+
+/* ---------- Phase 6 sizing helpers ---------- */
+
+/**
+ * Pushes a captured sizing intent onto a Figma node that is already
+ * appended to an auto-layout parent. Order matters:
+ *
+ *   1. Horizontal layoutSizing  (FILL needs the parent to be auto-layout)
+ *   2. Vertical layoutSizing
+ *   3. layoutGrow on the primary axis when `flex-grow > 0`
+ *   4. layoutAlign = STRETCH for `align-self: stretch`
+ *
+ * We guard each setter because Figma rejects HUG on rectangles / images
+ * and the typings claim availability that the runtime doesn't always
+ * honour.
+ */
+function applyChildSizing(built: SceneNode, child: CapturedNode): void {
+  setLayoutSizing(built, "horizontal", child.sizing.widthMode);
+  setLayoutSizing(built, "vertical", child.sizing.heightMode);
+
+  if (child.sizing.flexGrow > 0 && "layoutGrow" in built) {
+    try {
+      (built as unknown as { layoutGrow: number }).layoutGrow = child.sizing.flexGrow;
+    } catch {
+      // ignore
+    }
+  }
+  if (child.sizing.alignSelfStretch && "layoutAlign" in built) {
+    try {
+      (built as unknown as { layoutAlign: "INHERIT" | "STRETCH" | "MIN" | "CENTER" | "MAX" }).layoutAlign =
+        "STRETCH";
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
+ * Per-axis layoutSizing setter with capability detection.
+ *
+ * - HUG is only valid on auto-layout frames and text nodes; for plain
+ *   rectangles or vector frames we silently fall back to FIXED.
+ * - FILL requires the parent to be auto-layout — callers must guarantee
+ *   that before invoking. We don't double-check here to avoid a costly
+ *   parent traversal on every child.
+ */
+function setLayoutSizing(
+  node: SceneNode,
+  axis: "horizontal" | "vertical",
+  mode: AxisSizing,
+): void {
+  if (!("layoutSizingHorizontal" in node)) return;
+  if (mode === "HUG") {
+    const isText = node.type === "TEXT";
+    const isAutoLayoutFrame =
+      node.type === "FRAME" && (node as FrameNode).layoutMode !== "NONE";
+    if (!isText && !isAutoLayoutFrame) return;
+  }
+  try {
+    if (axis === "horizontal") {
+      (node as unknown as { layoutSizingHorizontal: AxisSizing }).layoutSizingHorizontal = mode;
+    } else {
+      (node as unknown as { layoutSizingVertical: AxisSizing }).layoutSizingVertical = mode;
+    }
+  } catch (err) {
+    console.warn(
+      `[HTMLoom] layoutSizing${axis === "horizontal" ? "Horizontal" : "Vertical"} = ${mode} failed for "${node.name}":`,
+      err,
+    );
+  }
+}
+
+/**
+ * Promotes the container's own auto-layout axes from FIXED to HUG when
+ * the captured CSS suggests content-driven sizing. Skipped for FILL —
+ * that's the parent's responsibility because it needs the parent itself
+ * to be auto-layout.
+ */
+function applyContainerOwnHug(frame: FrameNode, node: CapturedNode): void {
+  if (node.sizing.widthMode === "HUG") {
+    try {
+      (frame as unknown as { layoutSizingHorizontal: AxisSizing }).layoutSizingHorizontal = "HUG";
+    } catch {
+      // ignore
+    }
+  }
+  if (node.sizing.heightMode === "HUG") {
+    try {
+      (frame as unknown as { layoutSizingVertical: AxisSizing }).layoutSizingVertical = "HUG";
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function applyMinMax(node: SceneNode, sizing: SizingIntent): void {
+  const set = (key: "minWidth" | "maxWidth" | "minHeight" | "maxHeight", value: number | null) => {
+    if (value === null) return;
+    if (!(key in node)) return;
+    try {
+      (node as unknown as Record<string, number | null>)[key] = value;
+    } catch {
+      // Older runtimes lack min/max — silently skip.
+    }
+  };
+  set("minWidth", sizing.minWidth);
+  set("maxWidth", sizing.maxWidth);
+  set("minHeight", sizing.minHeight);
+  set("maxHeight", sizing.maxHeight);
+}
+
+/**
+ * Maps captured `position: absolute` anchors to Figma's per-axis
+ * constraints. The constraint says how the child's edges relate to the
+ * parent's edges when the parent resizes:
+ *
+ *   - left only            → MIN (left edge tracks parent left)
+ *   - right only           → MAX (right edge tracks parent right)
+ *   - both left + right    → STRETCH (both edges tracked, child grows)
+ *   - left:50% + transform → CENTER (centre tracks parent centre)
+ *
+ * We don't emit SCALE — proportional resize is rarely what the source
+ * CSS intended.
+ */
+function applyConstraints(node: SceneNode, child: CapturedNode): void {
+  const anchors = child.sizing.absoluteAnchors;
+  if (!anchors) return;
+  if (!("constraints" in node)) return;
+
+  type ConstraintAxis = "MIN" | "CENTER" | "MAX" | "STRETCH" | "SCALE";
+  let horizontal: ConstraintAxis = "MIN";
+  let vertical: ConstraintAxis = "MIN";
+
+  if (anchors.centerH) horizontal = "CENTER";
+  else if (anchors.left !== null && anchors.right !== null) horizontal = "STRETCH";
+  else if (anchors.right !== null && anchors.left === null) horizontal = "MAX";
+
+  if (anchors.centerV) vertical = "CENTER";
+  else if (anchors.top !== null && anchors.bottom !== null) vertical = "STRETCH";
+  else if (anchors.bottom !== null && anchors.top === null) vertical = "MAX";
+
+  try {
+    (node as unknown as { constraints: { horizontal: ConstraintAxis; vertical: ConstraintAxis } }).constraints = {
+      horizontal,
+      vertical,
+    };
+  } catch {
+    // Frames in some runtimes reject constraint writes on absolute children;
+    // fail-soft so the rest of the tree still imports.
+  }
 }
 
 /**

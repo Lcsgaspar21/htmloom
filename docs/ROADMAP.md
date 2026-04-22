@@ -191,13 +191,62 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
       the SVG out of context. Inline `style="..."` mentions are rewritten
       too. Stylesheet-driven `currentColor` remains unsupported.
 
-## Phase 6 — On the table
+## Phase 6 — Responsiveness ✓
 
-- [ ] **Responsive sizing** — opt-in `data-figma-fill="horizontal | vertical |
-      both"` attribute (or a heuristic on `width: 100%` / `flex: 1` children)
-      that emits `layoutSizingHorizontal: FILL_CONTAINER` so resizing the
-      imported root in Figma reflows children. Today every node has a fixed
-      captured size, which is why diminishing the root width does nothing.
+- [x] **Sizing intent capture (FIXED / HUG / FILL per axis)**. Hybrid +
+      aggressive heuristic: inline / inline-block → HUG; `position:
+      absolute` → FIXED with constraints; flex children with `flex-grow >
+      0` → FILL on primary axis; cross-axis stretch (`align-self: stretch`
+      or default `align-items: stretch`) → FILL on cross axis; block-level
+      whose measured width matches the parent's content box → FILL;
+      otherwise → HUG horizontally / HUG vertically (CSS `height: auto`
+      default). Override per element with
+      `data-figma-sizing-h="fill|hug|fixed"` and `-v` (also accepts
+      `fill_container`, `hug_contents`).
+- [x] **`min/max-width/height`** captured from CSS and applied to every
+      Figma node that exposes the matching field.
+- [x] **`layoutGrow` from `flex-grow`** so flex-1 children stretch the
+      auto-layout primary axis as expected.
+- [x] **`layoutAlign: STRETCH` from `align-self: stretch`** so individual
+      children opt into cross-axis fill regardless of the parent default.
+- [x] **`layoutWrap: "WRAP"` from `flex-wrap: wrap`** for responsive
+      grids of cards / badges that reflow when the container shrinks.
+- [x] **Absolute-position constraints**. `top`/`right`/`bottom`/`left`
+      become Figma's `MIN`/`MAX`/`STRETCH`/`CENTER` constraints; the
+      `left: 50%; transform: translateX(-50%)` idiom is detected and
+      mapped to `CENTER` instead of `STRETCH`.
+- [x] `examples/responsive-card.html` — mixed HUG/FILL/FIXED with badge
+      wrap and full-width CTA.
+- [x] `examples/responsive-grid.html` — `flex-wrap: wrap` tile grid with
+      `min-width: 240px` reflows from 4-up to single column on resize.
+
+### Known limits to revisit
+
+- **Multi-track CSS Grid** (2D `grid-template-columns: a b c` plus rows)
+  is still detected only as a single-axis auto-layout. `grid-area`,
+  named tracks, and `auto-fit / minmax` semantics aren't bridged — the
+  walker falls back to absolute positioning for grids the heuristic
+  can't classify cleanly. Phase 7 candidate.
+- **Width inference relies on a measured fill check** against the
+  parent's content box. Containers that happen to be exactly the parent
+  width by coincidence (e.g. a 320px button inside a 320px column with
+  zero padding) are misclassified as `FILL`. Override with
+  `data-figma-sizing-h="fixed"` when this matters.
+- **`align-content`, `justify-self`, `place-items`** and other
+  alignment longhands aren't bridged.
+- **CSS `aspect-ratio`** is ignored. Figma's `targetAspectRatio` exists
+  but is rarely worth the conversion overhead for prototypes.
+- **HUG on vector frames (inline `<svg>`) is rejected** because Figma
+  only allows HUG on auto-layout frames or text. We silently fall back
+  to `FIXED` so the icon keeps its captured size.
+- **Constraints on absolute children require the parent to be
+  non-auto-layout, OR the child to have `layoutPositioning:
+  ABSOLUTE`**. We emit the latter automatically when the parent is
+  auto-layout, but the constraint surface in Figma's runtime is
+  occasionally finicky — verify after import.
+
+## Phase 7 — On the table
+
 - [ ] Layout-field Variable bindings (padding, item spacing, corner radius)
       that consume the new Number tokens automatically.
 - [ ] Easing presets and configurable trigger delays for prototype reactions.
@@ -205,6 +254,8 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
 - [ ] Per-corner radius support for the auto-bind path.
 - [ ] SVG `currentColor` resolution from stylesheet selectors (currently only
       attribute / inline-style references are rewritten).
+- [ ] Multi-track CSS Grid → nested auto-layouts (rows of columns).
+- [ ] CSS `aspect-ratio` → Figma's `targetAspectRatio`.
 
 ## Phase 1 limits exposed by Phase 2 testing
 

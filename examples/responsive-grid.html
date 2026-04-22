@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HTMLoom · responsive grid</title>
+    <style>
+      :root {
+        --bg: #f7f8fc;
+        --surface: #ffffff;
+        --ink-900: #0d1320;
+        --ink-700: #3b465c;
+        --ink-500: #6b7891;
+        --line: #e6eaf3;
+        --brand-50: #eef2ff;
+        --brand-500: #6e56cf;
+        --brand-600: #5d49b6;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--ink-900);
+        padding: 48px;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0 0 4px;
+        font-weight: 700;
+      }
+      .subtitle {
+        margin: 0 0 32px;
+        font-size: 14px;
+        color: var(--ink-500);
+      }
+      /*
+       * Wrap-based responsive grid. Each card has a min-width of 240px and
+       * tries to fill the row. As the parent shrinks, items flow onto the
+       * next row — exactly the pattern a designer wants reproduced in Figma
+       * via `flex-wrap: wrap` + `min-width` on each item.
+       */
+      .grid {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 16px;
+        width: 100%;
+      }
+      .tile {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 18px;
+        flex: 1 1 240px;
+        min-width: 240px;
+      }
+      .tile-title {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0;
+      }
+      .tile-meta {
+        font-size: 12px;
+        color: var(--ink-500);
+        margin: 0;
+      }
+      .tile-value {
+        font-size: 28px;
+        font-weight: 700;
+        margin: 6px 0 0;
+        color: var(--brand-600);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Suppliers · weekly snapshot</h1>
+    <p class="subtitle">
+      Resize the imported frame in Figma — tiles should reflow from a 4-up to
+      3-up to 2-up to single-column layout, mirroring the browser behaviour.
+    </p>
+    <div class="grid">
+      <div class="tile">
+        <p class="tile-title">Active</p>
+        <p class="tile-meta">Across all tiers</p>
+        <p class="tile-value">1 284</p>
+      </div>
+      <div class="tile">
+        <p class="tile-title">At risk</p>
+        <p class="tile-meta">Renewal in &lt; 30 days</p>
+        <p class="tile-value">42</p>
+      </div>
+      <div class="tile">
+        <p class="tile-title">New this week</p>
+        <p class="tile-meta">Tier 1 + Tier 2</p>
+        <p class="tile-value">17</p>
+      </div>
+      <div class="tile">
+        <p class="tile-title">Critical alerts</p>
+        <p class="tile-meta">Awaiting acknowledgment</p>
+        <p class="tile-value">6</p>
+      </div>
+      <div class="tile">
+        <p class="tile-title">Onboarding</p>
+        <p class="tile-meta">Step 3 of 5</p>
+        <p class="tile-value">11</p>
+      </div>
+      <div class="tile">
+        <p class="tile-title">Reviews due</p>
+        <p class="tile-meta">Quarterly cadence</p>
+        <p class="tile-value">23</p>
+      </div>
+    </div>
+  </body>
+</html>
