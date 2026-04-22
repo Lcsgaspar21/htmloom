@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Alert priority popover — aligned layouts (wireframe v3)</title>
+<style>
+  :root {
+    --bg: #f5f5f4;
+    --ink: #1c1c1b;
+    --ink-2: #5b5b58;
+    --ink-3: #9a9a96;
+    --line: #c9c9c4;
+    --line-2: #e2e2dd;
+    --paper: #ffffff;
+    --hi: #f6f4ef;
+    --warn: #c9763a;
+    --neutral: #b8b8b3;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Inter", "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  .page { max-width: 1280px; margin: 0 auto; padding: 32px 24px 96px; }
+
+  header.intro { border-bottom: 1px dashed var(--line); padding-bottom: 20px; margin-bottom: 32px; }
+  header.intro h1 { font-size: 20px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  header.intro p { margin: 0; color: var(--ink-2); max-width: 820px; }
+  .kbd { font-family: ui-monospace, Menlo, monospace; background: #fafaf7; border: 1px solid var(--line-2); padding: 1px 5px; border-radius: 3px; font-size: 11px; color: var(--ink-2); }
+
+  .row { display: grid; grid-template-columns: 1fr; gap: 28px; }
+  @media (min-width: 1080px) { .row.three { grid-template-columns: 1fr 1fr 1fr; } }
+
+  .panel {
+    background: var(--paper);
+    border: 1px dashed var(--line);
+    border-radius: 4px;
+    padding: 18px;
+    position: relative;
+  }
+  .panel .tag {
+    position: absolute; top: -10px; left: 14px;
+    background: var(--bg); padding: 0 8px;
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--ink-2);
+  }
+  .panel .tag.win { color: var(--ink); border-bottom: 2px solid var(--ink); padding-bottom: 1px; }
+  .panel h2 { font-size: 13px; margin: 0 0 4px; letter-spacing: -0.005em; }
+  .panel .sub { color: var(--ink-2); font-size: 11.5px; margin: 0 0 14px; }
+
+  .stage {
+    background: repeating-linear-gradient(45deg, transparent 0 8px, rgba(0,0,0,0.018) 8px 16px);
+    border: 1px dashed var(--line-2);
+    border-radius: 4px;
+    padding: 22px;
+    display: flex; align-items: flex-start; justify-content: center;
+    min-height: 260px;
+  }
+
+  /* shared popover */
+  .popover {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    width: 320px;
+    padding: 12px 12px 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+    font-size: 12px;
+  }
+  .pop-section + .pop-section { margin-top: 12px; }
+  .pop-section h4 {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--ink-2);
+    margin: 0 0 6px;
+  }
+  .dots { display: inline-flex; gap: 2px; vertical-align: middle; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--neutral); }
+  .dot.on { background: var(--warn); }
+  .tier {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: #efefe9;
+    color: var(--ink-2);
+    font-size: 10.5px;
+    margin-right: 5px;
+  }
+  .row-line {
+    display: flex; align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+    font-size: 12px;
+  }
+  .row-line .name { flex: 1; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* aligned grid layout (Layout A) */
+  .row-grid {
+    display: grid;
+    grid-template-columns: auto 1fr 22px 36px;
+    column-gap: 6px;
+    align-items: center;
+    padding: 4px 0;
+    font-size: 12px;
+  }
+  .row-grid .tier { margin-right: 0; }
+  .row-grid .name { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-grid .icon-slot { display: flex; justify-content: center; align-items: center; }
+  .row-grid .dots-slot { display: flex; justify-content: flex-end; align-items: center; }
+
+  /* dots-as-trigger (Layout B) */
+  .dots.trigger {
+    border-bottom: 1px dotted var(--ink-3);
+    padding-bottom: 1px;
+    cursor: help;
+    position: relative;
+  }
+  .dots.trigger:hover { border-bottom-color: var(--ink); }
+  .dots.trigger .tt {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    right: 0;
+    background: #1c1c1b;
+    color: #f5f5f4;
+    padding: 7px 9px;
+    border-radius: 4px;
+    font-size: 11px;
+    line-height: 1.4;
+    width: 200px;
+    text-align: left;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 120ms ease;
+    z-index: 10;
+    font-style: normal;
+    font-weight: 400;
+  }
+  .dots.trigger .tt::after {
+    content: "";
+    position: absolute;
+    top: 100%; right: 6px;
+    border: 5px solid transparent;
+    border-top-color: #1c1c1b;
+  }
+  .dots.trigger .tt em { font-style: normal; color: #fff; font-weight: 600; }
+  .dots.trigger .tt strong { color: #fff; }
+  .dots.trigger:hover .tt { opacity: 1; transition-delay: 200ms; }
+  .row-line .delta {
+    font-size: 11px;
+    background: var(--hi);
+    border: 1px solid var(--line-2);
+    padding: 0 5px;
+    border-radius: 3px;
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  /* info icon */
+  .info {
+    display: inline-flex;
+    align-items: center; justify-content: center;
+    width: 14px; height: 14px;
+    border: 1px solid var(--ink-3);
+    color: var(--ink-2);
+    border-radius: 50%;
+    font-size: 9.5px;
+    line-height: 1;
+    cursor: help;
+    font-style: italic;
+    font-family: Georgia, serif;
+    position: relative;
+    user-select: none;
+    margin-left: 2px;
+  }
+  .info:hover, .info:focus-visible {
+    border-color: var(--ink);
+    color: var(--ink);
+    outline: none;
+  }
+  .info .tt {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    right: -8px;
+    background: #1c1c1b;
+    color: #f5f5f4;
+    padding: 7px 9px;
+    border-radius: 4px;
+    font-size: 11px;
+    line-height: 1.4;
+    width: 200px;
+    text-align: left;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 120ms ease 0ms;
+    z-index: 10;
+    font-style: normal;
+    font-family: inherit;
+    font-weight: 400;
+  }
+  .info .tt::after {
+    content: "";
+    position: absolute;
+    top: 100%; right: 12px;
+    border: 5px solid transparent;
+    border-top-color: #1c1c1b;
+  }
+  .info .tt strong { color: #fff; font-weight: 600; }
+  .info .tt em { font-style: normal; color: #fff; font-weight: 600; }
+  .info:hover .tt, .info:focus-visible .tt {
+    opacity: 1;
+    transition-delay: 200ms;
+  }
+
+  /* footer area */
+  .pop-foot {
+    border-top: 1px dashed var(--line-2);
+    padding-top: 7px;
+    margin-top: 12px;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px;
+  }
+  .pop-foot a {
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+  .pop-foot .actions { display: flex; gap: 4px; }
+  .icon-btn {
+    width: 22px; height: 22px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--paper);
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; color: var(--ink-2); font-size: 11px;
+  }
+
+  /* expandable footer info */
+  details.foot-info {
+    border-top: 1px dashed var(--line-2);
+    margin-top: 12px;
+    padding-top: 7px;
+  }
+  details.foot-info > summary {
+    cursor: pointer; list-style: none; user-select: none;
+    font-size: 11px; color: var(--ink-2);
+    display: flex; align-items: center; gap: 6px;
+  }
+  details.foot-info > summary::-webkit-details-marker { display: none; }
+  details.foot-info > summary::before {
+    content: "▸"; font-size: 10px; color: var(--ink-3);
+    transition: transform 120ms;
+  }
+  details.foot-info[open] > summary::before { transform: rotate(90deg); }
+  details.foot-info .body {
+    margin-top: 6px;
+    background: var(--hi);
+    border-radius: 3px;
+    padding: 8px 10px;
+    font-size: 11px;
+    color: var(--ink-2);
+  }
+  details.foot-info .body em { font-style: normal; color: var(--ink); font-weight: 600; }
+
+  .annot {
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--ink-2);
+    padding-left: 10px;
+    border-left: 2px solid var(--line);
+  }
+  .annot strong { color: var(--ink); }
+  .annot.bad { border-left-color: #b3422a; }
+  .annot.good { border-left-color: #2d6a4f; }
+
+  /* trade-offs / recommendation */
+  .tradeoffs {
+    margin-top: 36px;
+    border: 1px dashed var(--line);
+    background: var(--paper);
+    border-radius: 4px;
+    padding: 18px 22px;
+  }
+  .tradeoffs h2 {
+    margin: 0 0 12px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-2);
+  }
+  .tradeoffs table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .tradeoffs th, .tradeoffs td {
+    text-align: left; padding: 8px 10px;
+    border-bottom: 1px solid var(--line-2);
+    color: var(--ink-2); vertical-align: top;
+  }
+  .tradeoffs th { color: var(--ink); font-weight: 600; }
+  .tradeoffs td:first-child { color: var(--ink); font-weight: 600; width: 180px; }
+
+  .rec {
+    margin-top: 28px;
+    background: #1c1c1b;
+    color: #f5f5f4;
+    border-radius: 4px;
+    padding: 18px 22px;
+    font-size: 13px;
+  }
+  .rec h2 {
+    margin: 0 0 8px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(245,245,244,0.6);
+    font-weight: 600;
+  }
+  .rec p { margin: 0 0 6px; }
+  .rec strong { color: #fff; }
+
+  .baseline {
+    border: 1px dashed var(--line);
+    border-radius: 4px;
+    padding: 14px 18px;
+    background: var(--paper);
+    margin-bottom: 28px;
+    display: flex; gap: 24px; align-items: flex-start;
+  }
+  .baseline .left { flex: 0 0 280px; }
+  .baseline .left h3 { margin: 0 0 4px; font-size: 12.5px; }
+  .baseline .left p { margin: 0; font-size: 11.5px; color: var(--ink-2); }
+  .baseline .right { flex: 1; display: flex; justify-content: flex-end; }
+  .baseline .mini-pop {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    width: 280px;
+    padding: 10px 10px 6px;
+    font-size: 11.5px;
+  }
+  .baseline .mini-pop h4 { margin: 0 0 6px; font-size: 10.5px; color: var(--ink-2); font-weight: 600; }
+
+  .hover-hint {
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-align: center;
+    margin-top: 8px;
+  }
+  .hover-hint code { font-family: ui-monospace, Menlo, monospace; background: #fafaf7; border: 1px solid var(--line-2); padding: 0 4px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="intro">
+    <h1>Alert priority popover — compact disclosure</h1>
+    <p>
+      Given the space constraint, three minimal-footprint approaches.
+      Goal: explain the gap between the scorecard's <em>Mid</em> and the popover's <em>High</em>
+      without enlarging the popover or restructuring its rows.
+    </p>
+  </header>
+
+  <!-- BASELINE / TODAY -->
+  <div class="baseline">
+    <div class="left">
+      <h3>Today (reference)</h3>
+      <p>Section labelled <em>Target Priority</em>; row only shows the result. No explanation surface — exactly the conditions that produced REAL-415.</p>
+    </div>
+    <div class="right">
+      <div class="mini-pop">
+        <h4>Target Priority</h4>
+        <div class="row-line">
+          <span class="tier">Tier-1</span>
+          <span class="name">Chevron Corporation</span>
+          <span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot on"></span></span>
+        </div>
+        <div class="row-line">
+          <span class="tier">Tier-1</span>
+          <span class="name">Chevron Corp. (Singapore)</span>
+          <span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot on"></span></span>
+        </div>
+        <div class="row-line">
+          <span class="tier">Tier-3</span>
+          <span class="name">C. I. CHEVRON EXPORT</span>
+          <span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot on"></span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WHY RENAME -->
+  <section class="tradeoffs" style="margin-top: 28px;">
+    <h2>Why rename "Target Priority" inside the popover?</h2>
+    <table>
+      <thead>
+        <tr><th>Surface</th><th>Label today</th><th>Value displayed</th><th>What it means</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Scorecard / My Network</td>
+          <td><span style="color:var(--ink); font-weight:600;">Priority</span> — stays</td>
+          <td>Mid (base, fixed)</td>
+          <td>How important the supplier is to me, in general</td>
+        </tr>
+        <tr>
+          <td>Alert popover</td>
+          <td><span style="color:var(--danger,#b3422a);">Target Priority</span> — must change</td>
+          <td>High (= base × alert impact)</td>
+          <td>How impacted this supplier is by <em>this specific</em> alert</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin: 12px 0 0; font-size: 12px; color: var(--ink-2);">
+      Same word, two different meanings, two different numbers — that's the linguistic root cause of REAL-415.
+      Since the scorecard label stays, the popover label has to give. Candidates:
+      <em>Per-target severity</em> · <em>Severity per target</em> · <em>Target severity</em> ·
+      <em>How this alert affects each target</em>.
+      The exact word is up for grabs, but it cannot be "priority".
+    </p>
+  </section>
+
+  <h2 style="margin: 36px 0 6px; font-size: 14px;">Three approaches with proper dot alignment</h2>
+  <p style="color: var(--ink-2); margin: 0 0 24px; font-size: 12.5px;">
+    The previous draft misaligned dots across rows when icons appeared conditionally — fixed below.
+  </p>
+
+  <!-- THREE OPTIONS -->
+  <div class="row three" style="margin-top: 16px;">
+
+    <!-- LAYOUT A — reserved icon column -->
+    <section class="panel">
+      <span class="tag win">Layout A · recommended</span>
+      <h2>Reserved icon column</h2>
+      <p class="sub">14px gutter is always present at row end. Icon shown only on anomalous rows (base ≠ result). Dots aligned in every row.</p>
+      <div class="stage">
+        <div class="popover">
+          <div class="pop-section">
+            <h4>Per-target severity</h4>
+            <div class="row-grid">
+              <span class="tier">Tier-1</span>
+              <span class="name">Chevron Corporation</span>
+              <span class="dots-slot"><span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot on"></span></span></span>
+              <span class="icon-slot">
+                <span class="info" tabindex="0" aria-label="Why this differs from base">i
+                  <span class="tt" role="tooltip">
+                    Base <em>Mid</em>, alert impact <em>High</em> &rarr; <strong>High</strong>.
+                  </span>
+                </span>
+              </span>
+            </div>
+            <div class="row-grid">
+              <span class="tier">Tier-1</span>
+              <span class="name">Chevron Corp. (Singapore)</span>
+              <span class="dots-slot"><span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot on"></span></span></span>
+              <span class="icon-slot">
+                <span class="info" tabindex="0" aria-label="Why this differs from base">i
+                  <span class="tt" role="tooltip">
+                    Base <em>Mid</em>, alert impact <em>High</em> &rarr; <strong>High</strong>.
+                  </span>
+                </span>
+              </span>
+            </div>
+            <div class="row-grid">
+              <span class="tier">Tier-3</span>
+              <span class="name">C. I. CHEVRON EXPORT</span>
+              <span class="dots-slot"><span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot on"></span></span></span>
+              <span class="icon-slot">
+                <span class="info" tabindex="0" aria-label="Why this differs from base">i
+                  <span class="tt" role="tooltip">
+                    Base <em>Mid</em>, alert impact <em>High</em> &rarr; <strong>High</strong>.
+                  </span>
+                </span>
+              </span>
+            </div>
+            <div class="row-grid">
+              <span class="tier">Tier-1</span>
+              <span class="name">Roche Holding AG</span>
+              <span class="dots-slot"><span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot"></span></span></span>
+              <span class="icon-slot"></span>
+            </div>
+            <div class="row-grid">
+              <span class="tier">Tier-2</span>
+              <span class="name">Acme Logistics SE</span>
+              <span class="dots-slot"><span class="dots"><span class="dot on"></span></span></span>
+              <span class="icon-slot">
+                <span class="info" tabindex="0" aria-label="Why this differs from base">i
+                  <span class="tt" role="tooltip">
+                    Base <em>High</em>, alert impact <em>Low</em> &rarr; <strong>Low</strong>.
+                  </span>
+                </span>
+              </span>
+            </div>
+          </div>
+
+          <div class="pop-section">
+            <h4>Event type</h4>
+            <div class="row-grid">
+              <span></span>
+              <span class="name">Fire</span>
+              <span class="dots-slot"><span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot on"></span></span></span>
+              <span class="icon-slot"></span>
+            </div>
+          </div>
+
+          <div class="pop-section">
+            <h4>Modifiers</h4>
+            <div class="row-grid">
+              <span></span>
+              <span class="name">Multiple suppliers / customers</span>
+              <span class="dots-slot"><span class="delta">+1</span></span>
+              <span class="icon-slot"></span>
+            </div>
+          </div>
+
+          <div class="pop-foot">
+            <a>How is alert priority calculated?</a>
+            <div class="actions">
+              <button class="icon-btn">⬒</button>
+              <button class="icon-btn">⊘</button>
+              <button class="icon-btn">⋯</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="hover-hint">Hover any <code>i</code>. Roche has none (Mid × Mid = Mid, no surprise). Acme shows a <em>Low</em> result from a High base — same icon, opposite story.</p>
+      <p class="annot good">
+        <strong>Pros.</strong> Dots perfectly aligned. Discoverable signifier. Same icon explains both High-from-Mid and Low-from-High.
+      </p>
+      <p class="annot bad">
+        <strong>Cons.</strong> ~14px of right gutter always reserved. "No icon" carries meaning ("nothing to explain") — needs internal docs for support.
+      </p>
+    </section>
+
+    <!-- LAYOUT B — dots-as-trigger -->
+    <section class="panel">
+      <span class="tag">Layout B</span>
+      <h2>Dots are the trigger</h2>
+      <p class="sub">No icon at all. Anomalous rows get a dotted underline beneath the dots, signalling "hover me". Most compact possible.</p>
+      <div class="stage">
+        <div class="popover">
+          <div class="pop-section">
+            <h4>Per-target severity</h4>
+            <div class="row-line">
+              <span class="tier">Tier-1</span>
+              <span class="name">Chevron Corporation</span>
+              <span class="dots trigger" tabindex="0">
+                <span class="dot on"></span><span class="dot on"></span><span class="dot on"></span>
+                <span class="tt" role="tooltip">
+                  Base <em>Mid</em>, alert impact <em>High</em> &rarr; <strong>High</strong>.
+                </span>
+              </span>
+            </div>
+            <div class="row-line">
+              <span class="tier">Tier-1</span>
+              <span class="name">Chevron Corp. (Singapore)</span>
+              <span class="dots trigger" tabindex="0">
+                <span class="dot on"></span><span class="dot on"></span><span class="dot on"></span>
+                <span class="tt" role="tooltip">
+                  Base <em>Mid</em>, alert impact <em>High</em> &rarr; <strong>High</strong>.
+                </span>
+              </span>
+            </div>
+            <div class="row-line">
+              <span class="tier">Tier-3</span>
+              <span class="name">C. I. CHEVRON EXPORT</span>
+              <span class="dots trigger" tabindex="0">
+                <span class="dot on"></span><span class="dot on"></span><span class="dot on"></span>
+                <span class="tt" role="tooltip">
+                  Base <em>Mid</em>, alert impact <em>High</em> &rarr; <strong>High</strong>.
+                </span>
+              </span>
+            </div>
+            <div class="row-line">
+              <span class="tier">Tier-1</span>
+              <span class="name">Roche Holding AG</span>
+              <span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot"></span></span>
+            </div>
+            <div class="row-line">
+              <span class="tier">Tier-2</span>
+              <span class="name">Acme Logistics SE</span>
+              <span class="dots trigger" tabindex="0">
+                <span class="dot on"></span>
+                <span class="tt" role="tooltip">
+                  Base <em>High</em>, alert impact <em>Low</em> &rarr; <strong>Low</strong>.
+                </span>
+              </span>
+            </div>
+          </div>
+
+          <div class="pop-section">
+            <h4>Event type</h4>
+            <div class="row-line">
+              <span class="name">Fire</span>
+              <span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot on"></span></span>
+            </div>
+          </div>
+
+          <div class="pop-section">
+            <h4>Modifiers</h4>
+            <div class="row-line">
+              <span class="name">Multiple suppliers / customers</span>
+              <span class="delta">+1</span>
+            </div>
+          </div>
+
+          <div class="pop-foot">
+            <a>How is alert priority calculated?</a>
+            <div class="actions">
+              <button class="icon-btn">⬒</button>
+              <button class="icon-btn">⊘</button>
+              <button class="icon-btn">⋯</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="hover-hint">Hover the <em>underlined</em> dots. The dotted underline is the only signifier.</p>
+      <p class="annot good">
+        <strong>Pros.</strong> Zero extra columns. Maximum density. Dots aligned because nothing extra is added.
+      </p>
+      <p class="annot bad">
+        <strong>Cons.</strong> Discoverability weaker — dotted underline is subtle. Power users will learn it; new users may miss it. The same convention has to be reused elsewhere in the product so it gains familiarity.
+      </p>
+    </section>
+
+    <!-- OPTION 2 — footer expandable, revised copy -->
+    <section class="panel">
+      <span class="tag">Footer info</span>
+      <h2>Footer info, expandable (revised copy)</h2>
+      <p class="sub">No per-row indicator. One generic explanation at the bottom. Collapsed by default to save space.</p>
+      <div class="stage">
+        <div class="popover">
+          <div class="pop-section">
+            <h4>Per-target severity</h4>
+            <div class="row-line">
+              <span class="tier">Tier-1</span>
+              <span class="name">Chevron Corporation</span>
+              <span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot on"></span></span>
+            </div>
+            <div class="row-line">
+              <span class="tier">Tier-1</span>
+              <span class="name">Chevron Corp. (Singapore)</span>
+              <span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot on"></span></span>
+            </div>
+            <div class="row-line">
+              <span class="tier">Tier-3</span>
+              <span class="name">C. I. CHEVRON EXPORT</span>
+              <span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot on"></span></span>
+            </div>
+            <div class="row-line">
+              <span class="tier">Tier-2</span>
+              <span class="name">Acme Logistics SE</span>
+              <span class="dots"><span class="dot on"></span></span>
+            </div>
+          </div>
+
+          <div class="pop-section">
+            <h4>Event type</h4>
+            <div class="row-line">
+              <span class="name">Fire</span>
+              <span class="dots"><span class="dot on"></span><span class="dot on"></span><span class="dot on"></span></span>
+            </div>
+          </div>
+
+          <div class="pop-section">
+            <h4>Modifiers</h4>
+            <div class="row-line">
+              <span class="name">Multiple suppliers / customers</span>
+              <span class="delta">+1</span>
+            </div>
+          </div>
+
+          <details class="foot-info" open>
+            <summary>How are these severities calculated?</summary>
+            <div class="body">
+              Each severity above combines the target's <em>base priority</em> (set in their profile)
+              with <em>how strongly this alert affects them</em>.
+              The result can be <em>higher</em> than the base when the alert hits hard,
+              or <em>lower</em> when it barely touches the target.
+            </div>
+          </details>
+        </div>
+      </div>
+      <p class="annot good">
+        <strong>Pros.</strong> Zero per-row visual noise. One discoverable element. Cheapest to ship.
+      </p>
+      <p class="annot bad">
+        <strong>Cons.</strong> Generic. The user still has to map "the explanation" back to the specific row that confused them.
+        Fails the most acute case: when one target differs from the rest (e.g. Acme is Low while the others are High) — the footer gives no row-level signal.
+      </p>
+    </section>
+
+  </div>
+
+  <!-- TRADE-OFFS -->
+  <section class="tradeoffs">
+    <h2>Decisions to make consciously</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Decision</th>
+          <th>Recommendation</th>
+          <th>Why</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Section header rename</td>
+          <td><strong>Yes</strong> — "Target Priority" → "Per-target severity"</td>
+          <td>Cheapest, highest-leverage change. Defuses REAL-415 even before the icons land. Non-negotiable.</td>
+        </tr>
+        <tr>
+          <td>Tooltip-in-popover, is it OK?</td>
+          <td>Yes <strong>only</strong> via discoverable signifier (ⓘ icon). Never on the whole row.</td>
+          <td>Standard practice across Atlassian, Linear, Stripe, Notion, Figma. The signifier is what makes it acceptable.</td>
+        </tr>
+        <tr>
+          <td>Per-row vs footer-only</td>
+          <td><strong>Per-row</strong>. Footer-only fails REAL-415's question shape.</td>
+          <td>The user's question is "why is <em>this</em> Chevron High?", not "how does the formula work in general?". A per-row answer is exact; a footer answer requires mapping.</td>
+        </tr>
+        <tr>
+          <td>Icon on every row, or only on anomalies?</td>
+          <td><strong>Only on anomalies</strong> (base ≠ result).</td>
+          <td>Becomes a signal, not noise. Reduces visual weight by ~80% in typical alerts (95% of impact scores are Mid).</td>
+        </tr>
+        <tr>
+          <td>Footer link to docs?</td>
+          <td><strong>Yes</strong>, single line. No side-sheet.</td>
+          <td>Catches power users who want the whole formula. ~20px of footer space. Cheap to ship.</td>
+        </tr>
+        <tr>
+          <td>Tooltip trigger: hover or click?</td>
+          <td><strong>Both</strong>. Hover on desktop, tap on touch (standard tooltip primitive).</td>
+          <td>Touch fallback is mandatory; never rely on hover alone.</td>
+        </tr>
+        <tr>
+          <td>Tooltip content style</td>
+          <td>Short narrative: <em>"Base Mid, alert impact High → High"</em></td>
+          <td>~120 chars. Fits in a small tooltip without scrolling. Reads in plain language.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="rec">
+    <h2>Recommendation</h2>
+    <p><strong>Ship Layout A.</strong> Section header rename + reserved icon column + ⓘ on anomalous rows + footer link to docs. Dots stay aligned, signifier is discoverable, footprint is ~14px of right gutter that you'd probably want anyway for visual breathing room.</p>
+    <p>Layout B is the elegant fallback if the team rejects the extra gutter. Footer-only is the cheap fallback if engineering bandwidth is the constraint, but it doesn't fully solve REAL-415 because the user's question is per-row, not generic.</p>
+    <p>The <strong>section rename</strong> ships independently of which layout you choose — and is the single biggest defuse for REAL-415-class bugs even on its own.</p>
+  </section>
+
+</div>
+</body>
+</html>

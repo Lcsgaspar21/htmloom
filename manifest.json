@@ -1,0 +1,14 @@
+{
+  "name": "HTMLoom",
+  "id": "htmloom",
+  "api": "1.0.0",
+  "main": "build/code.js",
+  "ui": "build/ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["*"],
+    "reasoning": "Required to fetch external HTML files, stylesheets, and images referenced by user-provided HTML."
+  },
+  "documentAccess": "dynamic-page",
+  "capabilities": []
+}

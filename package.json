@@ -1,0 +1,31 @@
+{
+  "name": "htmloom",
+  "version": "0.1.0",
+  "description": "Weave HTML files into editable Figma layers — auto-layout aware, with prototype state support.",
+  "main": "build/code.js",
+  "scripts": {
+    "build": "npm run build:code && npm run build:ui",
+    "build:code": "esbuild src/code.ts --bundle --target=es2017 --platform=browser --outfile=build/code.js",
+    "build:ui": "esbuild src/ui.ts --bundle --target=es2017 --platform=browser --outfile=build/ui.js && node scripts/inline-ui.mjs",
+    "watch": "npm run build && concurrently \"npm:watch:code\" \"npm:watch:ui\"",
+    "watch:code": "esbuild src/code.ts --bundle --target=es2017 --platform=browser --outfile=build/code.js --watch",
+    "watch:ui": "esbuild src/ui.ts --bundle --target=es2017 --platform=browser --outfile=build/ui.js --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "figma",
+    "figma-plugin",
+    "html",
+    "import",
+    "prototype",
+    "auto-layout"
+  ],
+  "author": "Luis Gaspar",
+  "license": "MIT",
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.100.0",
+    "concurrently": "^9.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}
