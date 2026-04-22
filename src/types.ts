@@ -51,18 +51,70 @@ export interface AutoLayoutHint {
   confidence: number;
 }
 
+export type TextDecoration = "NONE" | "UNDERLINE" | "STRIKETHROUGH";
+
+/**
+ * One styled segment within a TextStyle. Per-character ranges are applied
+ * to a single Figma TEXT node so `<p>The <strong>bold</strong> word</p>`
+ * stays as one paragraph instead of being broken into siblings.
+ */
+export interface TextRun {
+  start: number;
+  end: number;
+  fontFamily: string;
+  fontWeight: number;
+  italic: boolean;
+  fontSize: number;
+  color: RGBA;
+  textDecoration: TextDecoration;
+}
+
 export interface TextStyle {
   characters: string;
   fontFamily: string;
   fontWeight: number;
+  italic: boolean;
   fontSize: number;
   lineHeight: number | null;
   letterSpacing: number;
   color: RGBA;
   textAlign: "LEFT" | "CENTER" | "RIGHT" | "JUSTIFIED";
+  textDecoration: TextDecoration;
+  /**
+   * When set with 2+ entries, the builder applies per-range styling and the
+   * top-level font/colour fields act as a fallback for ranges that omit them.
+   */
+  runs: TextRun[] | null;
 }
 
 export type NodeKind = "FRAME" | "TEXT" | "RECT" | "IMAGE";
+
+export interface ColorStop {
+  /** 0..1 along the gradient line. */
+  position: number;
+  color: RGBA;
+}
+
+/**
+ * Linear gradient parsed from a CSS `background-image: linear-gradient(...)`.
+ * Radial gradients are detected but not yet emitted (Phase 4).
+ */
+export interface Gradient {
+  type: "LINEAR";
+  /** CSS angle convention: 0 = "to top", 90 = "to right". */
+  angleDeg: number;
+  stops: ColorStop[];
+}
+
+/** Single CSS box-shadow layer. */
+export interface Shadow {
+  inset: boolean;
+  offsetX: number;
+  offsetY: number;
+  blur: number;
+  spread: number;
+  color: RGBA;
+}
 
 /** Trigger events we map onto Figma's prototype Reaction triggers. */
 export type TriggerEvent =
@@ -105,6 +157,10 @@ export interface CapturedNode {
   text: TextStyle | null;
   /** Resolved absolute URL when kind === "IMAGE". */
   imageSrc: string | null;
+  /** Linear gradient parsed from `background-image`; takes priority over `background`. */
+  gradient: Gradient | null;
+  /** Multi-layer CSS box-shadows mapped to Figma effects. */
+  shadows: Shadow[];
   children: CapturedNode[];
   /**
    * Set when the source element carried `data-figma-component`. The builder

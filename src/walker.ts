@@ -12,10 +12,15 @@ import type {
   BoxModel,
   CaptureResult,
   CapturedNode,
+  ColorStop,
   ComponentSpec,
+  Gradient,
   NodeKind,
   Padding,
   RGBA,
+  Shadow,
+  TextDecoration,
+  TextRun,
   TextStyle,
   TriggerEvent,
   TriggerSpec,
@@ -26,6 +31,11 @@ const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "META", "LINK", "NOSCRIPT", "HEAD"
 const TEXT_TAGS = new Set([
   "P", "SPAN", "A", "STRONG", "EM", "B", "I", "LABEL", "SMALL", "CODE",
   "H1", "H2", "H3", "H4", "H5", "H6", "LI", "TD", "TH", "FIGCAPTION",
+]);
+/** Inline-level tags that are valid as children of a rich-text container. */
+const INLINE_TAGS = new Set([
+  "SPAN", "STRONG", "EM", "B", "I", "A", "CODE", "SMALL", "U",
+  "MARK", "INS", "DEL", "Q", "ABBR", "SUB", "SUP",
 ]);
 
 export function captureDocument(doc: Document, rootSelector = "body"): CaptureResult {
@@ -70,25 +80,32 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
   const componentName = el.getAttribute("data-figma-component");
   const padding = parsePadding(style);
   const background = parseBackground(style);
+  const gradient = parseGradient(style.backgroundImage);
+  const shadows = parseShadows(style.boxShadow);
   const borderWidth = parsePx(style.borderTopWidth);
   const hasDecoration =
     background !== null ||
+    gradient !== null ||
+    shadows.length > 0 ||
     borderWidth > 0 ||
     padding.top + padding.right + padding.bottom + padding.left > 0;
 
-  // A leaf with direct text BUT visible decoration (badge / button / pill)
-  // becomes a FRAME with a synthetic TEXT child, so the decoration lands on
-  // the frame and the text renders inside its padding instead of replacing
-  // everything with a bare TEXT node.
-  const isDecoratedTextLeaf =
-    el.children.length === 0 && directText !== "" && hasDecoration;
+  // Decide whether this element produces text content. For elements that
+  // hold inline runs (e.g. `<p>The <strong>bold</strong> word</p>`), we
+  // capture a single TextStyle with multiple TextRun ranges so Figma keeps
+  // the paragraph as one TEXT node.
+  const textSpec = !componentName ? extractTextSpec(el, style, directText) : null;
+
+  const isDecoratedTextLeaf = textSpec !== null && hasDecoration;
 
   const rawKind = inferKind(el, directText);
   const kind: NodeKind = componentName
     ? "FRAME"
     : isDecoratedTextLeaf
       ? "FRAME"
-      : rawKind;
+      : textSpec
+        ? "TEXT"
+        : rawKind;
   const layout = decideLayout(el, style, isDecoratedTextLeaf);
 
   const node: CapturedNode = {
@@ -111,15 +128,17 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     },
     opacity: parseFloat(style.opacity || "1"),
     layout,
-    text: kind === "TEXT" && !componentName ? buildTextStyle(el, style, directText) : null,
+    text: kind === "TEXT" && !componentName ? textSpec : null,
     imageSrc: kind === "IMAGE" && !componentName ? resolveImageSrc(el) : null,
+    gradient,
+    shadows,
     children: [],
     component: componentName ? captureComponent(el, componentName, path) : null,
     triggers: parseTriggers(el),
   };
 
   if (isDecoratedTextLeaf && !componentName) {
-    node.children.push(synthesizeTextChild(el, style, directText, path));
+    node.children.push(synthesizeTextChild(textSpec!, path));
   } else if (kind === "FRAME" && !componentName) {
     // Components are driven by their variants; ignore raw children.
     // Pass `el` as the new root so child boxes are PARENT-relative — passing
@@ -141,12 +160,7 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
  * a TEXT child that lives inside the frame's padding. The text node itself
  * carries no decoration — that's all on the parent.
  */
-function synthesizeTextChild(
-  el: HTMLElement,
-  style: CSSStyleDeclaration,
-  directText: string,
-  parentPath: string,
-): CapturedNode {
+function synthesizeTextChild(text: TextStyle, parentPath: string): CapturedNode {
   return {
     id: `${parentPath}.t`,
     kind: "TEXT",
@@ -159,8 +173,10 @@ function synthesizeTextChild(
     border: { width: 0, color: null, radius: { tl: 0, tr: 0, br: 0, bl: 0 } },
     opacity: 1,
     layout: { mode: "NONE", primary: "MIN", cross: "MIN", itemSpacing: 0, confidence: 0 },
-    text: buildTextStyle(el, style, directText),
+    text,
     imageSrc: null,
+    gradient: null,
+    shadows: [],
     children: [],
     component: null,
     triggers: [],
@@ -296,21 +312,70 @@ function parsePadding(s: CSSStyleDeclaration): Padding {
 
 function parseColor(input: string | null | undefined): RGBA | null {
   if (!input) return null;
-  const m = input.match(/rgba?\(([^)]+)\)/);
-  if (!m) return null;
-  const parts = m[1].split(",").map((p) => parseFloat(p.trim()));
-  if (parts.length < 3) return null;
-  const [r, g, b, a = 1] = parts;
-  if (a === 0) return null;
-  return { r: r / 255, g: g / 255, b: b / 255, a };
+  const trimmed = input.trim();
+  if (trimmed === "transparent") return null;
+
+  const rgbMatch = trimmed.match(/rgba?\(([^)]+)\)/);
+  if (rgbMatch) {
+    const parts = rgbMatch[1].split(",").map((p) => parseFloat(p.trim()));
+    if (parts.length < 3) return null;
+    const [r, g, b, a = 1] = parts;
+    if (a === 0) return null;
+    return { r: r / 255, g: g / 255, b: b / 255, a };
+  }
+
+  // Defensive hex fallback for cases where computed values keep #abc / #aabbcc.
+  const hex = trimmed.match(/^#([0-9a-fA-F]{3,8})$/);
+  if (hex) {
+    const h = hex[1];
+    const expand = (s: string) => parseInt(s.length === 1 ? s + s : s, 16) / 255;
+    if (h.length === 3 || h.length === 4) {
+      const a = h.length === 4 ? expand(h[3]) : 1;
+      if (a === 0) return null;
+      return { r: expand(h[0]), g: expand(h[1]), b: expand(h[2]), a };
+    }
+    if (h.length === 6 || h.length === 8) {
+      const a = h.length === 8 ? expand(h.slice(6, 8)) : 1;
+      if (a === 0) return null;
+      return { r: expand(h.slice(0, 2)), g: expand(h.slice(2, 4)), b: expand(h.slice(4, 6)), a };
+    }
+  }
+
+  return null;
 }
 
 function parseBackground(s: CSSStyleDeclaration): RGBA | null {
-  // Only solid background-color for Phase 1; gradients land in Phase 2.
+  // Solid `background-color` only — gradients are handled separately and stack on top.
   return parseColor(s.backgroundColor);
 }
 
-function buildTextStyle(el: HTMLElement, s: CSSStyleDeclaration, directText: string): TextStyle {
+/**
+ * Returns a TextStyle if the element produces text content, with `runs`
+ * populated when child inline elements introduce styling changes. Returns
+ * null for elements that aren't text-bearing leaves or rich-text containers.
+ */
+function extractTextSpec(
+  el: HTMLElement,
+  style: CSSStyleDeclaration,
+  directText: string,
+): TextStyle | null {
+  if (el.children.length === 0) {
+    if (!directText) return null;
+    return buildTextStyle(directText, style, [
+      makeRun(0, directText.length, style),
+    ]);
+  }
+  if (!isRichTextCandidate(el, style)) return null;
+  const { characters, runs } = collectRichText(el, style);
+  if (!characters) return null;
+  return buildTextStyle(characters, style, runs);
+}
+
+function buildTextStyle(
+  characters: string,
+  s: CSSStyleDeclaration,
+  runs: TextRun[],
+): TextStyle {
   const lh = s.lineHeight === "normal" ? null : parsePx(s.lineHeight);
   const align = (s.textAlign || "left").toUpperCase();
   const mappedAlign = (["LEFT", "CENTER", "RIGHT", "JUSTIFY"].includes(align)
@@ -318,15 +383,244 @@ function buildTextStyle(el: HTMLElement, s: CSSStyleDeclaration, directText: str
     : "LEFT") as TextStyle["textAlign"];
 
   return {
-    characters: directText || el.textContent?.trim() || "",
-    fontFamily: (s.fontFamily || "Inter").split(",")[0].replace(/['"]/g, "").trim() || "Inter",
+    characters,
+    fontFamily: pickFontFamily(s),
     fontWeight: Number(s.fontWeight) || 400,
+    italic: isItalic(s),
     fontSize: parsePx(s.fontSize) || 14,
     lineHeight: lh,
     letterSpacing: parsePx(s.letterSpacing),
     color: parseColor(s.color) || { r: 0, g: 0, b: 0, a: 1 },
     textAlign: mappedAlign,
+    textDecoration: parseDecoration(s),
+    runs: runs.length > 1 ? runs : null,
   };
+}
+
+/* ---------- rich text ---------- */
+
+function isRichTextCandidate(el: HTMLElement, style: CSSStyleDeclaration): boolean {
+  if (el.children.length === 0) return false;
+  // Flex/grid parents render children as block-like items, not inline runs.
+  // Treat them as regular containers even if their children are inline tags.
+  const display = style.display;
+  if (display !== "block" && display !== "inline" && display !== "inline-block") {
+    return false;
+  }
+  for (const child of Array.from(el.children) as HTMLElement[]) {
+    if (!INLINE_TAGS.has(child.tagName)) return false;
+    // Nested inline elements stay out of scope until Phase 4.
+    if (child.children.length > 0) return false;
+    const childDisplay = window.getComputedStyle(child).display;
+    if (childDisplay !== "inline" && childDisplay !== "inline-block") return false;
+  }
+  return true;
+}
+
+interface RichTextItem {
+  text: string;
+  style: CSSStyleDeclaration;
+}
+
+function collectRichText(
+  el: HTMLElement,
+  parentStyle: CSSStyleDeclaration,
+): { characters: string; runs: TextRun[] } {
+  const items: RichTextItem[] = [];
+  for (const node of Array.from(el.childNodes)) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const txt = collapseWhitespace(node.textContent || "");
+      if (!txt) continue;
+      items.push({ text: txt, style: parentStyle });
+      continue;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) continue;
+    const child = node as HTMLElement;
+    const childStyle = window.getComputedStyle(child);
+    if (childStyle.display === "none") continue;
+    const txt = collapseWhitespace(child.textContent || "");
+    if (!txt) continue;
+    items.push({ text: txt, style: childStyle });
+  }
+
+  // Trim leading whitespace of the first run and trailing of the last,
+  // matching how CSS strips boundary whitespace inside text containers.
+  if (items.length > 0) {
+    items[0].text = items[0].text.replace(/^\s+/, "");
+    items[items.length - 1].text = items[items.length - 1].text.replace(/\s+$/, "");
+  }
+
+  let characters = "";
+  const runs: TextRun[] = [];
+  for (const item of items) {
+    if (!item.text) continue;
+    const start = characters.length;
+    characters += item.text;
+    runs.push(makeRun(start, characters.length, item.style));
+  }
+  return { characters, runs };
+}
+
+function makeRun(start: number, end: number, s: CSSStyleDeclaration): TextRun {
+  return {
+    start,
+    end,
+    fontFamily: pickFontFamily(s),
+    fontWeight: Number(s.fontWeight) || 400,
+    italic: isItalic(s),
+    fontSize: parsePx(s.fontSize) || 14,
+    color: parseColor(s.color) || { r: 0, g: 0, b: 0, a: 1 },
+    textDecoration: parseDecoration(s),
+  };
+}
+
+function collapseWhitespace(s: string): string {
+  // CSS would collapse runs of whitespace to a single space and trim newlines
+  // around block boundaries. For inline runs we keep internal single spaces.
+  return s.replace(/\s+/g, " ");
+}
+
+function pickFontFamily(s: CSSStyleDeclaration): string {
+  return (s.fontFamily || "Inter").split(",")[0].replace(/['"]/g, "").trim() || "Inter";
+}
+
+function isItalic(s: CSSStyleDeclaration): boolean {
+  return s.fontStyle === "italic" || s.fontStyle === "oblique";
+}
+
+function parseDecoration(s: CSSStyleDeclaration): TextDecoration {
+  const line = (s as unknown as { textDecorationLine?: string }).textDecorationLine
+    || s.textDecoration
+    || "";
+  if (line.includes("underline")) return "UNDERLINE";
+  if (line.includes("line-through")) return "STRIKETHROUGH";
+  return "NONE";
+}
+
+/* ---------- gradients ---------- */
+
+function parseGradient(backgroundImage: string | null | undefined): Gradient | null {
+  if (!backgroundImage || backgroundImage === "none") return null;
+  // Accept only the first linear-gradient layer for now; ignore radial/stacks.
+  const m = backgroundImage.match(/^linear-gradient\(([\s\S]+)\)\s*(?:,|$)/);
+  if (!m) return null;
+
+  const parts = splitTopLevelCommas(m[1]);
+  if (parts.length < 2) return null;
+
+  let angleDeg = 180;
+  let stopsStart = 0;
+  const first = parts[0].trim();
+  const angleMatch = first.match(/^(-?\d*\.?\d+)deg$/);
+  if (angleMatch) {
+    angleDeg = parseFloat(angleMatch[1]);
+    stopsStart = 1;
+  } else if (/^to\s/i.test(first)) {
+    angleDeg = parseDirection(first);
+    stopsStart = 1;
+  }
+
+  const stops: ColorStop[] = [];
+  for (const part of parts.slice(stopsStart)) {
+    const stop = parseColorStop(part.trim());
+    if (stop) stops.push(stop);
+  }
+  fillMissingPositions(stops);
+  if (stops.length < 2) return null;
+  return { type: "LINEAR", angleDeg, stops };
+}
+
+function parseDirection(dir: string): number {
+  const map: Record<string, number> = {
+    "to top": 0, "to top right": 45, "to right top": 45,
+    "to right": 90, "to bottom right": 135, "to right bottom": 135,
+    "to bottom": 180, "to bottom left": 225, "to left bottom": 225,
+    "to left": 270, "to top left": 315, "to left top": 315,
+  };
+  return map[dir.trim().toLowerCase()] ?? 180;
+}
+
+function parseColorStop(s: string): ColorStop | null {
+  const colorMatch = s.match(/^(rgba?\([^)]+\)|#[0-9a-fA-F]{3,8}|[a-zA-Z]+)/);
+  if (!colorMatch) return null;
+  const color = parseColor(colorMatch[0]);
+  if (!color) return null;
+  const remaining = s.slice(colorMatch[0].length).trim();
+  let position = NaN;
+  const posMatch = remaining.match(/(-?\d*\.?\d+)\s*%/);
+  if (posMatch) position = parseFloat(posMatch[1]) / 100;
+  return { position, color };
+}
+
+function fillMissingPositions(stops: ColorStop[]): void {
+  if (stops.length === 0) return;
+  if (isNaN(stops[0].position)) stops[0].position = 0;
+  if (isNaN(stops[stops.length - 1].position)) stops[stops.length - 1].position = 1;
+  let lastKnown = 0;
+  for (let i = 1; i < stops.length - 1; i++) {
+    if (!isNaN(stops[i].position)) {
+      lastKnown = i;
+      continue;
+    }
+    let nextKnown = stops.length - 1;
+    for (let j = i + 1; j < stops.length; j++) {
+      if (!isNaN(stops[j].position)) { nextKnown = j; break; }
+    }
+    const span = nextKnown - lastKnown;
+    const step = (stops[nextKnown].position - stops[lastKnown].position) / span;
+    stops[i].position = stops[lastKnown].position + step * (i - lastKnown);
+  }
+}
+
+/* ---------- shadows ---------- */
+
+function parseShadows(value: string | null | undefined): Shadow[] {
+  if (!value || value === "none") return [];
+  const layers = splitTopLevelCommas(value);
+  const out: Shadow[] = [];
+  for (const layer of layers) {
+    const parsed = parseShadowLayer(layer);
+    if (parsed) out.push(parsed);
+  }
+  return out;
+}
+
+function parseShadowLayer(s: string): Shadow | null {
+  const inset = /\binset\b/i.test(s);
+  const cleaned = s.replace(/\binset\b/i, "").trim();
+  const colorMatch = cleaned.match(/(rgba?\([^)]+\)|#[0-9a-fA-F]{3,8})/);
+  if (!colorMatch) return null;
+  const color = parseColor(colorMatch[0]);
+  if (!color) return null;
+  const remaining = cleaned.replace(colorMatch[0], "").trim();
+  const nums = (remaining.match(/-?\d*\.?\d+/g) || []).map((n) => parseFloat(n));
+  if (nums.length < 2) return null;
+  return {
+    inset,
+    offsetX: nums[0],
+    offsetY: nums[1],
+    blur: nums[2] ?? 0,
+    spread: nums[3] ?? 0,
+    color,
+  };
+}
+
+function splitTopLevelCommas(s: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let buf = "";
+  for (const ch of s) {
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    if (ch === "," && depth === 0) {
+      if (buf.trim()) out.push(buf);
+      buf = "";
+    } else {
+      buf += ch;
+    }
+  }
+  if (buf.trim()) out.push(buf);
+  return out;
 }
 
 function resolveImageSrc(el: HTMLElement): string | null {

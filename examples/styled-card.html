@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>HTMLoom — Phase 3 fidelity demo</title>
+    <style>
+      :root {
+        --fg: #1f2024;
+        --muted: #6b7280;
+        --accent: #6e56cf;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 64px;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+        color: var(--fg);
+        background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+        min-height: 100vh;
+      }
+      .deck {
+        display: flex;
+        flex-direction: row;
+        gap: 32px;
+        align-items: flex-start;
+      }
+      .card {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        padding: 24px;
+        width: 320px;
+        border-radius: 16px;
+        background: white;
+        box-shadow:
+          0 12px 40px rgba(15, 23, 42, 0.08),
+          0 2px 6px rgba(15, 23, 42, 0.04);
+      }
+      .card--accent {
+        background: linear-gradient(135deg, #6e56cf 0%, #8b5cf6 60%, #ec4899 100%);
+        color: white;
+        box-shadow: 0 24px 60px rgba(110, 86, 207, 0.35);
+      }
+      .card__eyebrow {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .card--accent .card__eyebrow { color: rgba(255, 255, 255, 0.75); }
+      .card__title {
+        font-size: 20px;
+        font-weight: 600;
+        line-height: 1.3;
+      }
+      .card__body {
+        font-size: 14px;
+        line-height: 1.55;
+        color: var(--muted);
+      }
+      .card--accent .card__body { color: rgba(255, 255, 255, 0.85); }
+      .card__cta {
+        align-self: flex-start;
+        padding: 8px 16px;
+        background: var(--accent);
+        color: white;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 500;
+        box-shadow: 0 4px 12px rgba(110, 86, 207, 0.3);
+      }
+      .card--accent .card__cta {
+        background: white;
+        color: var(--accent);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="deck">
+      <div class="card">
+        <span class="card__eyebrow">Phase 3</span>
+        <span class="card__title">Box shadows, gradients, mixed text</span>
+        <span class="card__body">
+          The card has <strong>two stacked drop shadows</strong>, a subtle one
+          for depth and a wider one for ambient lift. The page behind uses a
+          <em>linear gradient</em> from off-white to lavender.
+        </span>
+        <span class="card__cta">Read more</span>
+      </div>
+
+      <div class="card card--accent">
+        <span class="card__eyebrow">Accent variant</span>
+        <span class="card__title">Gradient fill on the card itself</span>
+        <span class="card__body">
+          A diagonal gradient flows from <strong>indigo</strong> through
+          <em>violet</em> to <strong>pink</strong>. The CTA flips to a white
+          chip with its own soft shadow.
+        </span>
+        <span class="card__cta">Try it</span>
+      </div>
+    </div>
+  </body>
+</html>

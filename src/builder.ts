@@ -10,7 +10,10 @@ import type {
   CaptureResult,
   CapturedNode,
   ComponentSpec,
+  Gradient,
   RGBA,
+  Shadow,
+  TextRun,
   TextStyle,
   TriggerEvent,
   TriggerSpec,
@@ -63,18 +66,28 @@ export async function buildFromCapture(capture: CaptureResult): Promise<SceneNod
 
 async function preloadFonts(node: CapturedNode): Promise<void> {
   if (node.text) {
-    const font = pickFont(node.text);
-    const key = fontKey(font);
-    if (!loadedFonts.has(key)) {
-      try {
-        await figma.loadFontAsync(font);
-        loadedFonts.add(key);
-      } catch {
-        // Fall back silently — buildText will use FALLBACK_FONT.
+    await loadFont({ family: node.text.fontFamily, style: weightStyle(node.text.fontWeight, node.text.italic) });
+    if (node.text.runs) {
+      for (const run of node.text.runs) {
+        await loadFont({ family: run.fontFamily, style: weightStyle(run.fontWeight, run.italic) });
       }
     }
   }
+  if (node.component) {
+    for (const variant of node.component.variants) await preloadFonts(variant.tree);
+  }
   for (const child of node.children) await preloadFonts(child);
+}
+
+async function loadFont(font: FontName): Promise<void> {
+  const key = fontKey(font);
+  if (loadedFonts.has(key)) return;
+  try {
+    await figma.loadFontAsync(font);
+    loadedFonts.add(key);
+  } catch {
+    // Silently fall back — buildText resolves missing fonts to FALLBACK_FONT.
+  }
 }
 
 async function createNodeFor(
@@ -285,17 +298,50 @@ function buildTrigger(event: TriggerEvent): Trigger {
 function buildText(node: CapturedNode): TextNode {
   const t = node.text!;
   const text = figma.createText();
-  const font = pickFont(t);
-  text.fontName = loadedFonts.has(fontKey(font)) ? font : FALLBACK_FONT;
+  const baseFont = resolveFont(t.fontFamily, t.fontWeight, t.italic);
+  text.fontName = baseFont;
   text.characters = t.characters;
   text.fontSize = t.fontSize;
   text.textAlignHorizontal = t.textAlign === "JUSTIFIED" ? "JUSTIFIED" : t.textAlign;
   if (t.lineHeight) text.lineHeight = { value: t.lineHeight, unit: "PIXELS" };
   if (t.letterSpacing) text.letterSpacing = { value: t.letterSpacing, unit: "PIXELS" };
   text.fills = [{ type: "SOLID", color: rgb(t.color), opacity: t.color.a }];
+  if (t.textDecoration !== "NONE") text.textDecoration = t.textDecoration;
   text.name = node.label || "text";
   text.resize(Math.max(1, node.box.width), Math.max(1, node.box.height));
+  if (t.runs) applyTextRuns(text, t.runs);
   return text;
+}
+
+function applyTextRuns(text: TextNode, runs: TextRun[]): void {
+  for (const run of runs) {
+    if (run.start >= run.end) continue;
+    const font = resolveFont(run.fontFamily, run.fontWeight, run.italic);
+    try {
+      text.setRangeFontName(run.start, run.end, font);
+    } catch {
+      // Font not loaded for this range — leave as the base font.
+    }
+    text.setRangeFontSize(run.start, run.end, run.fontSize);
+    text.setRangeFills(run.start, run.end, [
+      { type: "SOLID", color: rgb(run.color), opacity: run.color.a },
+    ]);
+    if (run.textDecoration !== "NONE") {
+      text.setRangeTextDecoration(run.start, run.end, run.textDecoration);
+    }
+  }
+}
+
+/** Returns a loaded font for the given specs; falls back to FALLBACK_FONT. */
+function resolveFont(family: string, weight: number, italic: boolean): FontName {
+  const candidate: FontName = { family, style: weightStyle(weight, italic) };
+  if (loadedFonts.has(fontKey(candidate))) return candidate;
+  // Try without italic if italic variant is missing.
+  if (italic) {
+    const noItalic: FontName = { family, style: weightStyle(weight, false) };
+    if (loadedFonts.has(fontKey(noItalic))) return noItalic;
+  }
+  return FALLBACK_FONT;
 }
 
 async function buildImage(node: CapturedNode): Promise<SceneNode> {
@@ -329,13 +375,14 @@ function buildRect(node: CapturedNode): RectangleNode {
 /* ---------- shared visuals ---------- */
 
 function applyVisuals(node: FrameNode | RectangleNode, source: CapturedNode): void {
+  const fills: Paint[] = [];
   if (source.background) {
-    (node as FrameNode).fills = [
-      { type: "SOLID", color: rgb(source.background), opacity: source.background.a },
-    ];
-  } else {
-    (node as FrameNode).fills = [];
+    fills.push({ type: "SOLID", color: rgb(source.background), opacity: source.background.a });
   }
+  if (source.gradient) {
+    fills.push(buildGradientPaint(source.gradient));
+  }
+  (node as FrameNode).fills = fills;
 
   if (source.border.width > 0 && source.border.color) {
     (node as FrameNode).strokes = [
@@ -344,8 +391,59 @@ function applyVisuals(node: FrameNode | RectangleNode, source: CapturedNode): vo
     (node as FrameNode).strokeWeight = source.border.width;
   }
 
+  if (source.shadows.length > 0) {
+    (node as FrameNode).effects = source.shadows.map(buildShadowEffect);
+  }
+
   applyCornerRadius(node, source);
   node.opacity = source.opacity;
+}
+
+function buildGradientPaint(g: Gradient): GradientPaint {
+  return {
+    type: "GRADIENT_LINEAR",
+    gradientTransform: gradientTransform(g.angleDeg),
+    gradientStops: g.stops.map((s) => ({
+      position: clamp01(s.position),
+      color: { r: s.color.r, g: s.color.g, b: s.color.b, a: s.color.a },
+    })),
+  };
+}
+
+/**
+ * Builds the 2x3 affine matrix that maps Figma's gradient unit space onto
+ * the fill's bounding box. (0,0) -> start, (1,0) -> end, with the
+ * perpendicular axis kept unit-length so the gradient line is centered.
+ */
+function gradientTransform(angleDeg: number): Transform {
+  const rad = (angleDeg * Math.PI) / 180;
+  const dx = Math.sin(rad);
+  const dy = -Math.cos(rad);
+  const startX = 0.5 - dx / 2;
+  const startY = 0.5 - dy / 2;
+  return [
+    [dx, -dy, startX],
+    [dy, dx, startY],
+  ];
+}
+
+function buildShadowEffect(s: Shadow): Effect {
+  const base = {
+    color: { r: s.color.r, g: s.color.g, b: s.color.b, a: s.color.a },
+    offset: { x: s.offsetX, y: s.offsetY },
+    radius: Math.max(0, s.blur),
+    spread: Math.max(0, s.spread),
+    visible: true,
+    blendMode: "NORMAL" as BlendMode,
+  };
+  if (s.inset) {
+    return { type: "INNER_SHADOW", ...base } as InnerShadowEffect;
+  }
+  return { type: "DROP_SHADOW", ...base, showShadowBehindNode: false } as DropShadowEffect;
+}
+
+function clamp01(n: number): number {
+  return n < 0 ? 0 : n > 1 ? 1 : n;
 }
 
 function applyCornerRadius(node: FrameNode | RectangleNode, source: CapturedNode): void {
@@ -364,12 +462,13 @@ function rgb(c: RGBA): RGB {
   return { r: c.r, g: c.g, b: c.b };
 }
 
-function pickFont(t: TextStyle): FontName {
-  const style = weightToStyle(t.fontWeight);
-  return { family: t.fontFamily, style };
+function weightStyle(weight: number, italic: boolean): string {
+  const base = weightBase(weight);
+  if (!italic) return base;
+  return base === "Regular" ? "Italic" : `${base} Italic`;
 }
 
-function weightToStyle(w: number): string {
+function weightBase(w: number): string {
   if (w >= 800) return "Bold";
   if (w >= 700) return "Bold";
   if (w >= 600) return "Semi Bold";

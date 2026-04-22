@@ -49,29 +49,56 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
 - A `data-figma-component` with a single variant produces a plain Component
   (not a Component Set) since variants can't switch with no sibling target.
 
-## Phase 3 — Fidelity boost
+## Phase 3 — Fidelity boost ✓
 
-- [ ] Linear and radial gradients
-- [ ] Box shadows (multi-layer)
-- [ ] Mixed text runs (per-span colors / weights inside one paragraph)
-- [ ] `background-image` on non-`<img>` elements
+- [x] Linear gradients (CSS `linear-gradient(...)` with angle / `to <side>` /
+      colour stops, auto-distributing missing positions)
+- [x] Multi-layer box shadows (drop + inset, mapped to Figma effects)
+- [x] Mixed text runs — `<p>The <strong>bold</strong> word</p>` becomes a
+      single Figma TEXT with per-range font / color / size / decoration
+- [x] Italic and `text-decoration` (underline / line-through) on text and runs
+- [x] `examples/styled-card.html` covering gradients + shadows + runs
+
+### Known limits to revisit
+
+- **Radial gradients**: parsed-aware but skipped at build time. Emits no fill
+  rather than guessing. Phase 4.
+- **`background-image` for non-gradient values** (image URLs on non-`<img>`
+  elements): not yet captured. Phase 4.
+- **Multi-image stacks**: only the first `linear-gradient` layer is consumed;
+  additional stacked backgrounds are ignored.
+- **Linear gradient aspect ratio**: the gradient axis is placed in unit
+  bounding-box space, so for very wide or very tall boxes the on-screen angle
+  drifts slightly from the CSS-rendered gradient. Acceptable for prototypes.
+- **Rich-text detection requires a non-flex / non-grid parent**. A `<div
+  style="display:flex">` with two `<span>` children stays as a frame with two
+  TEXT siblings (correct), not a single rich-text node.
+- **Nested inline elements** inside a rich-text container (e.g.
+  `<p>The <a><strong>bold link</strong></a> here</p>`) collapse to the outer
+  element's text content; no per-character style for the nested branch.
+  Phase 4.
+- **Whitespace**: leading and trailing whitespace inside a rich-text container
+  is trimmed; internal runs of whitespace collapse to a single space, matching
+  the default CSS `white-space: normal`. `<pre>` is not yet honoured.
+- Italic fonts fall back to the upright weight if Figma can't resolve the
+  italic style for the requested family (e.g. some monospace fonts have no
+  italic variant).
 
 ## Phase 4 — Design token bridge
 
 - [ ] Optional `data-figma-token="color/brand-500"` mapping
 - [ ] Read CSS custom properties and offer to create matching Figma Variables
 - [ ] Re-bind solid fills / strokes to Variables when names match
+- [ ] Radial gradients + image-URL backgrounds + nested rich-text runs
 
 ## Phase 1 limits exposed by Phase 2 testing
 
 These are not regressions — they were latent in Phase 1 and only became
 visible when authoring richer markup for variants.
 
-- **Mixed text + element children of a single node lose the text runs.**
-  Example: `<div>Hello <strong>world</strong>!</div>` keeps only `world`.
-  Workaround for now: wrap each text run in its own inline element. Proper
-  fix lands in Phase 3 as part of mixed text-run support (single Figma TEXT
-  node with per-character styling).
+- **Mixed text + element children of a single node**: fixed in Phase 3 via
+  rich-text runs. `<p>Hello <strong>world</strong>!</p>` now becomes a single
+  Figma TEXT node with the correct ranges.
 - A non-auto-layout chain three or more levels deep used to position
   grandchildren in root coordinates instead of parent-relative coordinates.
   Fixed during the Phase 2 audit (walker now passes the immediate `el` as

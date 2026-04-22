@@ -1,6 +1,6 @@
 # HTMLoom
 
-> Weave HTML files into editable Figma layers — auto-layout aware, with prototype state support coming next.
+> Weave HTML files into editable Figma layers — auto-layout aware, prototype-ready, with proper gradients, shadows, and rich text.
 
 HTMLoom is a self-contained Figma plugin. It loads HTML in its own sandboxed iframe (no external service required), walks the live DOM, and creates native Figma frames, text nodes, and images. The intent is to keep prototyping cycles tight: design in HTML, hand it to Figma in seconds, then iterate with PMs and engineers in either tool.
 
@@ -22,7 +22,14 @@ HTMLoom is a self-contained Figma plugin. It loads HTML in its own sandboxed ifr
 - Triggers via `data-figma-on-click | -on-press | -on-hover | -on-mouse-enter | -on-mouse-leave`
 - Inactive variants can use `display: none`; the walker forces visibility only during capture
 
-Phases 3–4 (gradients, shadows, mixed text runs, design-token bridge) are tracked in `docs/ROADMAP.md`.
+**Phase 3 — Visual fidelity.** Gradients, shadows, and rich text:
+
+- Linear gradients on any element's background (`linear-gradient(135deg, ...)`)
+- Multi-layer `box-shadow` (drop + inset, mapped to Figma effects)
+- Mixed text runs — `<p>The <strong>bold</strong> word</p>` becomes a single
+  Figma TEXT with per-range font weight, italic, color, size, and decoration
+
+Phase 4 (design-token bridge, radial gradients, image-url backgrounds) is tracked in `docs/ROADMAP.md`.
 
 ### Authoring API (Phase 2)
 
@@ -58,11 +65,12 @@ In Figma desktop:
 
 ## Try it
 
-The repo ships two examples used during development:
+The repo ships three examples used during development:
 
 ```
 examples/alert-priority-wireframe.html   # Phase 1 — static layout
 examples/popover-states.html             # Phase 2 — interactive variants
+examples/styled-card.html                # Phase 3 — gradients, shadows, runs
 ```
 
 Drop either onto the plugin window to verify your local build.
