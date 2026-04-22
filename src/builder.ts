@@ -718,12 +718,7 @@ async function fetchImageBytes(src: string): Promise<Uint8Array> {
     const comma = src.indexOf(",");
     const meta = src.slice(0, comma);
     const data = src.slice(comma + 1);
-    if (meta.includes(";base64")) {
-      const binary = atob(data);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      return bytes;
-    }
+    if (meta.includes(";base64")) return decodeBase64(data);
     const decoded = decodeURIComponent(data);
     const bytes = new Uint8Array(decoded.length);
     for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i);
@@ -732,4 +727,59 @@ async function fetchImageBytes(src: string): Promise<Uint8Array> {
   const res = await fetch(src);
   const buf = await res.arrayBuffer();
   return new Uint8Array(buf);
+}
+
+/**
+ * Decodes a standard base64 string to bytes WITHOUT relying on `atob`.
+ *
+ * The Figma plugin main thread runs in a heavily restricted sandbox that
+ * does NOT expose `atob` / `btoa`, even though the browser typings claim
+ * they exist. Using them here throws `TypeError: 'not a function'` and
+ * reaches users as the grey `buildImage` placeholder.
+ *
+ * Implementation: lookup-table-driven walk over 4-char chunks with
+ * explicit padding handling. Whitespace and the URL-safe alphabet (`-_`)
+ * are tolerated; invalid characters are skipped (matches `atob` lenience).
+ */
+const BASE64_CHARS =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const BASE64_LOOKUP = (() => {
+  const lookup = new Int16Array(256).fill(-1);
+  for (let i = 0; i < BASE64_CHARS.length; i++) {
+    lookup[BASE64_CHARS.charCodeAt(i)] = i;
+  }
+  // URL-safe alphabet aliases
+  lookup["-".charCodeAt(0)] = 62;
+  lookup["_".charCodeAt(0)] = 63;
+  return lookup;
+})();
+
+function decodeBase64(input: string): Uint8Array {
+  // Strip any whitespace / line breaks that PNG / data URI authors add.
+  let clean = "";
+  for (let i = 0; i < input.length; i++) {
+    const code = input.charCodeAt(i);
+    if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) continue;
+    clean += input[i];
+  }
+  let pad = 0;
+  if (clean.endsWith("==")) pad = 2;
+  else if (clean.endsWith("=")) pad = 1;
+  const len = clean.length;
+  const byteLen = Math.floor((len * 3) / 4) - pad;
+  const bytes = new Uint8Array(byteLen);
+  let bIdx = 0;
+  for (let i = 0; i < len; i += 4) {
+    const c0 = BASE64_LOOKUP[clean.charCodeAt(i)];
+    const c1 = BASE64_LOOKUP[clean.charCodeAt(i + 1)];
+    const c2Char = clean.charCodeAt(i + 2);
+    const c3Char = clean.charCodeAt(i + 3);
+    const c2 = c2Char === 0x3d ? 0 : BASE64_LOOKUP[c2Char]; // '='
+    const c3 = c3Char === 0x3d ? 0 : BASE64_LOOKUP[c3Char];
+    if (c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0) continue;
+    bytes[bIdx++] = (c0 << 2) | (c1 >> 4);
+    if (bIdx < byteLen) bytes[bIdx++] = ((c1 & 0x0f) << 4) | (c2 >> 2);
+    if (bIdx < byteLen) bytes[bIdx++] = ((c2 & 0x03) << 6) | c3;
+  }
+  return bytes;
 }
