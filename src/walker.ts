@@ -317,6 +317,7 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     layout,
     text: kind === "TEXT" && !componentName ? textSpec : null,
     imageSrc: kind === "IMAGE" && !componentName ? resolveImageSrc(el) : null,
+    svgMarkup: kind === "IMAGE" && !componentName ? serializeInlineSvg(el) : null,
     gradient,
     backgroundImageUrl,
     shadows,
@@ -368,6 +369,7 @@ function synthesizeTextChild(
     layout: { mode: "NONE", primary: "MIN", cross: "MIN", itemSpacing: 0, confidence: 0 },
     text,
     imageSrc: null,
+    svgMarkup: null,
     gradient: null,
     backgroundImageUrl: null,
     shadows: [],
@@ -996,41 +998,46 @@ function splitTopLevelCommas(s: string): string[] {
 
 function resolveImageSrc(el: HTMLElement): string | null {
   if (el instanceof HTMLImageElement) return el.currentSrc || el.src || null;
-  if (el.tagName.toLowerCase() === "svg") {
-    // Snapshot the rendered colour BEFORE serialising — once the SVG is loaded
-    // out-of-context via an `<img>` for canvas rasterisation, `currentColor`
-    // resolves to the user agent default (typically black) instead of the
-    // parent's `color`. Substituting in attributes keeps icon strokes / fills
-    // matching their on-page look.
-    const resolvedColor = window.getComputedStyle(el).color || "currentColor";
-    const cloned = el.cloneNode(true) as SVGElement;
+  // Inline `<svg>` is handled separately via `serializeInlineSvg` so the
+  // builder can produce native editable vectors instead of a raster fallback.
+  return null;
+}
 
-    // XMLSerializer doesn't always emit the SVG namespace declaration when
-    // the source element lives in an HTML document — without `xmlns` the
-    // resulting markup loads as an empty image when fed back to `<img>`.
-    if (!cloned.getAttribute("xmlns")) {
-      cloned.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-    }
-    // If the source has no width/height attrs (e.g. authors that rely on
-    // CSS sizing), the loaded image collapses to 0×0. Fall back to the
-    // viewBox dimensions when present so the rasteriser has something to draw.
-    if (!cloned.getAttribute("width") || !cloned.getAttribute("height")) {
-      const vb = cloned.getAttribute("viewBox");
-      if (vb) {
-        const parts = vb.split(/[\s,]+/).map(parseFloat);
-        if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
-          cloned.setAttribute("width", String(parts[2]));
-          cloned.setAttribute("height", String(parts[3]));
-        }
+/**
+ * Serialise an inline `<svg>` to standalone XML markup, ready to feed into
+ * `figma.createNodeFromSvgAsync` on the main thread. Performs three fixes
+ * that the raw `XMLSerializer` output otherwise misses:
+ *
+ *  1. Snapshots the rendered `color` and substitutes `currentColor` paint
+ *     references — once the SVG leaves the DOM, `currentColor` resolves to
+ *     the UA default (black), washing out coloured icons.
+ *  2. Adds the SVG namespace declaration if missing, since serialising from
+ *     within an HTML document occasionally drops it and Figma rejects the
+ *     payload.
+ *  3. Backfills `width`/`height` from `viewBox` when authors rely on CSS
+ *     sizing, so the imported vector frame has a sensible intrinsic size.
+ */
+function serializeInlineSvg(el: HTMLElement): string | null {
+  if (el.tagName.toLowerCase() !== "svg") return null;
+  const resolvedColor = window.getComputedStyle(el).color || "currentColor";
+  const cloned = el.cloneNode(true) as SVGElement;
+
+  if (!cloned.getAttribute("xmlns")) {
+    cloned.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  }
+  if (!cloned.getAttribute("width") || !cloned.getAttribute("height")) {
+    const vb = cloned.getAttribute("viewBox");
+    if (vb) {
+      const parts = vb.split(/[\s,]+/).map(parseFloat);
+      if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+        cloned.setAttribute("width", String(parts[2]));
+        cloned.setAttribute("height", String(parts[3]));
       }
     }
-
-    substituteCurrentColor(cloned, resolvedColor);
-    const serializer = new XMLSerializer();
-    const xml = serializer.serializeToString(cloned);
-    return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(xml)))}`;
   }
-  return null;
+
+  substituteCurrentColor(cloned, resolvedColor);
+  return new XMLSerializer().serializeToString(cloned);
 }
 
 /**

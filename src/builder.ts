@@ -393,6 +393,14 @@ function resolveFont(family: string, weight: number, italic: boolean): FontName 
 }
 
 async function buildImage(node: CapturedNode): Promise<SceneNode> {
+  // Inline SVGs become real Figma vector frames so they stay crisp at any
+  // zoom and remain editable. We only fall back to the raster path for
+  // <img> tags that point at PNG / JPEG / GIF resources.
+  if (node.svgMarkup) {
+    const vector = await buildSvgVector(node);
+    if (vector) return vector;
+  }
+
   const rect = figma.createRectangle();
   rect.name = node.label || "image";
   rect.resize(Math.max(1, node.box.width), Math.max(1, node.box.height));
@@ -405,9 +413,6 @@ async function buildImage(node: CapturedNode): Promise<SceneNode> {
       rect.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash: image.hash }];
       return rect;
     } catch (err) {
-      // Don't swallow — surface to the plugin console so users can tell why
-      // an icon ended up as a grey placeholder. Common cause: SVG bytes
-      // reaching `figma.createImage`, which only accepts PNG / JPEG / GIF.
       console.warn(
         `[HTMLoom] image creation failed for "${node.label || node.tag}" (src=${node.imageSrc.slice(0, 80)}…):`,
         err,
@@ -416,6 +421,58 @@ async function buildImage(node: CapturedNode): Promise<SceneNode> {
   }
   rect.fills = [{ type: "SOLID", color: { r: 0.9, g: 0.9, b: 0.9 }, opacity: 1 }];
   return rect;
+}
+
+/**
+ * Builds a Figma vector frame from inline SVG markup. Prefers the async
+ * variant when present (Figma added `createNodeFromSvgAsync` in plugin
+ * runtime v1; the sync version is still supported and acts as a fallback
+ * for older typings).
+ *
+ * `rescale` is used instead of `resize` so the inner vector children scale
+ * with the frame; raw `resize` would only stretch the frame, leaving the
+ * paths at their intrinsic size.
+ */
+async function buildSvgVector(node: CapturedNode): Promise<FrameNode | null> {
+  if (!node.svgMarkup) return null;
+  try {
+    // Cast so we can pick the async API when the runtime exposes it. The
+    // typings shipped with @figma/plugin-typings vary in version across
+    // installs, so we feature-detect rather than relying on the type.
+    const api = figma as unknown as {
+      createNodeFromSvgAsync?: (svg: string) => Promise<FrameNode>;
+      createNodeFromSvg: (svg: string) => FrameNode;
+    };
+    const frame = api.createNodeFromSvgAsync
+      ? await api.createNodeFromSvgAsync(node.svgMarkup)
+      : api.createNodeFromSvg(node.svgMarkup);
+    frame.name = node.label || "svg";
+    const targetW = Math.max(1, node.box.width);
+    const targetH = Math.max(1, node.box.height);
+    const currW = frame.width;
+    const currH = frame.height;
+    if (currW > 0 && currH > 0) {
+      // Use the smaller axis ratio to preserve the SVG's aspect — avoids
+      // squashing the icon when the captured box was rounded by the
+      // browser to a non-square rectangle.
+      const scale = Math.min(targetW / currW, targetH / currH);
+      // Figma rejects rescale calls below 0.01 — fall back to a plain
+      // resize for those (vector children stay at their natural size,
+      // which is acceptable for sub-pixel icons).
+      if (scale >= 0.01 && Math.abs(scale - 1) > 0.001) {
+        frame.rescale(scale);
+      } else if (scale < 0.01) {
+        frame.resize(targetW, targetH);
+      }
+    }
+    return frame;
+  } catch (err) {
+    console.warn(
+      `[HTMLoom] createNodeFromSvgAsync failed for "${node.label || node.tag}":`,
+      err,
+    );
+    return null;
+  }
 }
 
 async function buildRect(node: CapturedNode, ctx: BuildContext): Promise<RectangleNode> {

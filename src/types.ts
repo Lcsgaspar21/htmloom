@@ -164,6 +164,13 @@ export interface CapturedNode {
   text: TextStyle | null;
   /** Resolved absolute URL when kind === "IMAGE". */
   imageSrc: string | null;
+  /**
+   * Serialized SVG markup for inline `<svg>` elements. When present the
+   * builder uses `figma.createNodeFromSvgAsync` to produce native editable
+   * vectors instead of rasterising — keeps icons crisp at any zoom level
+   * and lets users tweak paths/colours after import.
+   */
+  svgMarkup: string | null;
   /** Linear or radial gradient parsed from `background-image`. */
   gradient: Gradient | null;
   /** URL from `background-image: url(...)` on a non-img element; layers above gradient/solid. */
