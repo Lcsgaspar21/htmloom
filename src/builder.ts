@@ -134,7 +134,13 @@ async function buildFrame(
   for (const child of node.children) {
     const built = await createNodeFor(child, false, ctx);
     frame.appendChild(built);
-    if (!useAutoLayout) {
+    // Components and ComponentSets sit on top of an auto-layout parent with
+    // absolute positioning so their natural size doesn't distort siblings.
+    const isComponentLike = built.type === "COMPONENT" || built.type === "COMPONENT_SET";
+    if (!useAutoLayout || isComponentLike) {
+      if (useAutoLayout && isComponentLike && "layoutPositioning" in built) {
+        (built as unknown as { layoutPositioning: "AUTO" | "ABSOLUTE" }).layoutPositioning = "ABSOLUTE";
+      }
       built.x = child.box.x;
       built.y = child.box.y;
     }
@@ -148,41 +154,52 @@ async function buildFrame(
 }
 
 /**
- * Builds a Figma Component Set from a CapturedNode flagged as a component.
- * Each variant subtree becomes its own Component, then `combineAsVariants`
- * merges them. Variant names appear under the "State" property in Figma.
+ * Builds a Figma Component (or Component Set when there are 2+ variants) from
+ * a CapturedNode flagged as a component. Each variant subtree becomes its own
+ * Component, then `combineAsVariants` merges them. Variant names appear under
+ * the "State" property in Figma.
+ *
+ * NOTE: we deliberately do NOT resize the resulting set — `combineAsVariants`
+ * already sizes it to fit all variants plus the system padding, and overriding
+ * that crops the variants.
  */
 async function buildComponentSet(
   owner: CapturedNode,
   spec: ComponentSpec,
   ctx: BuildContext,
-): Promise<ComponentSetNode> {
-  const components: ComponentNode[] = [];
+): Promise<SceneNode> {
   const variantMap = new Map<string, ComponentNode>();
+  const components: ComponentNode[] = [];
 
   for (const variant of spec.variants) {
-    // Each variant tree is treated as a sub-root frame.
     const variantFrame = await buildFrame(variant.tree, true, ctx);
     figma.currentPage.appendChild(variantFrame);
 
     const component = figma.createComponentFromNode(variantFrame);
-    component.name = `State=${variant.name}`;
     components.push(component);
     variantMap.set(variant.name, component);
 
-    // The captured root id of the variant now corresponds to the component itself,
-    // not the (now-replaced) frame. Re-register so triggers on the variant root
-    // can still find their scene node.
+    // The captured root id of the variant now refers to the (now-replaced)
+    // frame; remap it to the resulting Component so triggers on the variant
+    // root resolve correctly.
     ctx.nodeIdMap.set(variant.tree.id, component);
   }
 
-  const set = figma.combineAsVariants(components, figma.currentPage);
-  set.name = spec.name;
   ctx.variantSets.set(owner.id, variantMap);
 
-  // Mirror the source element's footprint so the parent frame allocates
-  // enough room when the set is later appended.
-  set.resize(Math.max(1, owner.box.width || set.width), Math.max(1, owner.box.height || set.height));
+  // Single-variant component: just a Component, no Set. Reactions still
+  // register but have nowhere to navigate — wireReactions silently skips
+  // missing targets, which is the correct behaviour here.
+  if (components.length === 1) {
+    components[0].name = spec.name;
+    return components[0];
+  }
+
+  for (let i = 0; i < components.length; i++) {
+    components[i].name = `State=${spec.variants[i].name}`;
+  }
+  const set = figma.combineAsVariants(components, figma.currentPage);
+  set.name = spec.name;
   return set;
 }
 
@@ -240,7 +257,7 @@ async function applyReactions(
 
 function buildReaction(event: TriggerEvent, destinationId: string): Reaction {
   return {
-    trigger: { type: event } as Trigger,
+    trigger: buildTrigger(event),
     actions: [
       {
         type: "NODE",
@@ -251,6 +268,18 @@ function buildReaction(event: TriggerEvent, destinationId: string): Reaction {
       } as Action,
     ],
   } as Reaction;
+}
+
+/**
+ * MOUSE_ENTER and MOUSE_LEAVE require a `delay` field per Figma's typings;
+ * the other trigger types only need `type`. Without the delay, Figma either
+ * throws or treats the reaction as malformed.
+ */
+function buildTrigger(event: TriggerEvent): Trigger {
+  if (event === "MOUSE_ENTER" || event === "MOUSE_LEAVE") {
+    return { type: event, delay: 0 } as Trigger;
+  }
+  return { type: event } as Trigger;
 }
 
 function buildText(node: CapturedNode): TextNode {

@@ -68,19 +68,39 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
   if (box.width === 0 && box.height === 0 && !directText) return null;
 
   const componentName = el.getAttribute("data-figma-component");
-  const kind = inferKind(el, directText);
-  const layout = detectAutoLayout(el, style);
+  const padding = parsePadding(style);
+  const background = parseBackground(style);
+  const borderWidth = parsePx(style.borderTopWidth);
+  const hasDecoration =
+    background !== null ||
+    borderWidth > 0 ||
+    padding.top + padding.right + padding.bottom + padding.left > 0;
+
+  // A leaf with direct text BUT visible decoration (badge / button / pill)
+  // becomes a FRAME with a synthetic TEXT child, so the decoration lands on
+  // the frame and the text renders inside its padding instead of replacing
+  // everything with a bare TEXT node.
+  const isDecoratedTextLeaf =
+    el.children.length === 0 && directText !== "" && hasDecoration;
+
+  const rawKind = inferKind(el, directText);
+  const kind: NodeKind = componentName
+    ? "FRAME"
+    : isDecoratedTextLeaf
+      ? "FRAME"
+      : rawKind;
+  const layout = decideLayout(el, style, isDecoratedTextLeaf);
 
   const node: CapturedNode = {
     id: path,
-    kind: componentName ? "FRAME" : kind,
+    kind,
     tag: el.tagName.toLowerCase(),
     label: componentName || pickLabel(el),
     box,
-    padding: parsePadding(style),
-    background: parseBackground(style),
+    padding,
+    background,
     border: {
-      width: parsePx(style.borderTopWidth),
+      width: borderWidth,
       color: parseColor(style.borderTopColor),
       radius: {
         tl: parsePx(style.borderTopLeftRadius),
@@ -98,16 +118,76 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     triggers: parseTriggers(el),
   };
 
-  // Components are driven by their variants; ignore raw children.
-  if (kind === "FRAME" && !componentName) {
+  if (isDecoratedTextLeaf && !componentName) {
+    node.children.push(synthesizeTextChild(el, style, directText, path));
+  } else if (kind === "FRAME" && !componentName) {
+    // Components are driven by their variants; ignore raw children.
+    // Pass `el` as the new root so child boxes are PARENT-relative — passing
+    // the original root would leave grandchildren in root coords, breaking
+    // absolute positioning whenever a non-auto-layout frame contains another
+    // non-auto-layout frame.
     let i = 0;
     for (const child of Array.from(el.children) as HTMLElement[]) {
-      const captured = walk(child, root, `${path}.${i++}`);
+      const captured = walk(child, el, `${path}.${i++}`);
       if (captured) node.children.push(captured);
     }
   }
 
   return node;
+}
+
+/**
+ * For a decorated text leaf (e.g. `<span class="badge">High</span>`), emit
+ * a TEXT child that lives inside the frame's padding. The text node itself
+ * carries no decoration — that's all on the parent.
+ */
+function synthesizeTextChild(
+  el: HTMLElement,
+  style: CSSStyleDeclaration,
+  directText: string,
+  parentPath: string,
+): CapturedNode {
+  return {
+    id: `${parentPath}.t`,
+    kind: "TEXT",
+    tag: "_text",
+    label: "text",
+    // Box is computed by the parent's auto-layout; values here are just a hint.
+    box: { x: 0, y: 0, width: 0, height: 0 },
+    padding: { top: 0, right: 0, bottom: 0, left: 0 },
+    background: null,
+    border: { width: 0, color: null, radius: { tl: 0, tr: 0, br: 0, bl: 0 } },
+    opacity: 1,
+    layout: { mode: "NONE", primary: "MIN", cross: "MIN", itemSpacing: 0, confidence: 0 },
+    text: buildTextStyle(el, style, directText),
+    imageSrc: null,
+    children: [],
+    component: null,
+    triggers: [],
+  };
+}
+
+/**
+ * Layout decision. Decorated text leaves get a HORIZONTAL auto-layout that
+ * respects `text-align`, so badges/buttons hug their text and centre it
+ * naturally. Everything else goes through the regular heuristic.
+ */
+function decideLayout(
+  el: HTMLElement,
+  style: CSSStyleDeclaration,
+  isDecoratedTextLeaf: boolean,
+): AutoLayoutHint {
+  const detected = detectAutoLayout(el, style);
+  if (!isDecoratedTextLeaf) return detected;
+  if (detected.mode !== "NONE") return detected;
+  const align = (style.textAlign || "left").toLowerCase();
+  return {
+    mode: "HORIZONTAL",
+    primary: align === "center" ? "CENTER" : align === "right" ? "MAX" : "MIN",
+    cross: "CENTER",
+    itemSpacing: 0,
+    confidence: 0.85,
+  };
 }
 
 /**
@@ -117,7 +197,6 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
  */
 function captureComponent(el: HTMLElement, name: string, path: string): ComponentSpec {
   const variants: VariantSpec[] = [];
-  let i = 0;
   for (const child of Array.from(el.children) as HTMLElement[]) {
     const variantName = child.getAttribute("data-figma-variant");
     if (!variantName) continue;
@@ -130,7 +209,6 @@ function captureComponent(el: HTMLElement, name: string, path: string): Componen
     } finally {
       restore();
     }
-    i++;
   }
   if (variants.length === 0) {
     throw new Error(
@@ -168,12 +246,14 @@ const TRIGGER_ATTRS: Array<[string, TriggerEvent]> = [
 ];
 
 function parseTriggers(el: HTMLElement): TriggerSpec[] {
-  const out: TriggerSpec[] = [];
+  // Dedupe by event so `on-hover` + `on-mouse-enter` on the same element
+  // don't produce two competing MOUSE_ENTER reactions. Last attribute wins.
+  const byEvent = new Map<TriggerEvent, string>();
   for (const [attr, event] of TRIGGER_ATTRS) {
     const target = el.getAttribute(attr);
-    if (target) out.push({ event, targetVariant: target });
+    if (target) byEvent.set(event, target);
   }
-  return out;
+  return Array.from(byEvent, ([event, targetVariant]) => ({ event, targetVariant }));
 }
 
 /* ---------- helpers ---------- */
