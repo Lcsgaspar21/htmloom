@@ -359,6 +359,15 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     // and works for implicit row placement).
     if (style.display === "grid") {
       restructureMultiTrackGrid(node, style);
+    } else {
+      // Block-level containers whose children stack vertically are the
+      // implicit "vertical auto-layout" of CSS — same shape as `display:
+      // flex; flex-direction: column`, just authored without flex. We
+      // promote them post-walk so that as inner children HUG / FILL their
+      // own AL, the outer container's height follows. Without this, a
+      // `<section>` whose child grid hugs to a different height than the
+      // captured rect leaves the header overlapping the cells.
+      maybePromoteBlockStack(node, style);
     }
   }
 
@@ -1430,6 +1439,73 @@ function synthesiseRowFrame(
       alignSelfStretch: true,
       absoluteAnchors: null,
     },
+  };
+}
+
+/* ---------- Block-level vertical stack promotion (Phase 7 hotfix) ---------- */
+
+/**
+ * Promotes a block-level container with 2+ vertically-stacked children to a
+ * `VERTICAL` auto-layout. This is the single biggest source of "header is
+ * sitting on top of the cards" bugs: CSS lays block children out as a
+ * vertical stack by default, and Figma needs an explicit auto-layout for
+ * sibling reflow to follow when an inner child HUGs to a new height.
+ *
+ * Conservative trigger conditions:
+ *   - `style.display` is one of the block-like values
+ *   - layout heuristic hasn't already chosen a mode (skips flex / grid)
+ *   - 2+ in-flow children (absolute children are ignored — they're
+ *     positioned via constraints anyway)
+ *   - children are non-overlapping and ordered top-to-bottom in the source
+ *     DOM (overlap of more than 2px aborts the promotion)
+ *
+ * `itemSpacing` is the average gap between consecutive children, which
+ * captures CSS `margin` (we don't model margins explicitly) without
+ * over-fitting to one outlier.
+ */
+function maybePromoteBlockStack(node: CapturedNode, style: CSSStyleDeclaration): void {
+  if (node.layout.mode !== "NONE") return;
+  if (node.children.length < 2) return;
+
+  const display = style.display;
+  if (
+    display !== "block" &&
+    display !== "list-item" &&
+    display !== "flow-root" &&
+    display !== "table"
+  ) {
+    return;
+  }
+
+  const inFlow = node.children.filter((c) => c.sizing.absoluteAnchors === null);
+  if (inFlow.length < 2) return;
+
+  let lastBottom = -Infinity;
+  let totalGap = 0;
+  let gapCount = 0;
+  for (let i = 0; i < inFlow.length; i++) {
+    const c = inFlow[i];
+    if (i > 0) {
+      const gap = c.box.y - lastBottom;
+      // Significant overlap means the children aren't a clean vertical
+      // stack — bail out and let the absolute-positioning fallback take
+      // over (e.g. authored stacks with negative margins).
+      if (gap < -2) return;
+      if (gap >= 0) {
+        totalGap += gap;
+        gapCount++;
+      }
+    }
+    lastBottom = c.box.y + c.box.height;
+  }
+
+  const itemSpacing = gapCount > 0 ? Math.round(totalGap / gapCount) : 0;
+  node.layout = {
+    mode: "VERTICAL",
+    primary: "MIN",
+    cross: "MIN",
+    itemSpacing,
+    confidence: 0.7,
   };
 }
 
