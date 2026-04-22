@@ -404,8 +404,14 @@ async function buildImage(node: CapturedNode): Promise<SceneNode> {
       const image = figma.createImage(bytes);
       rect.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash: image.hash }];
       return rect;
-    } catch {
-      // Fall through to placeholder fill.
+    } catch (err) {
+      // Don't swallow — surface to the plugin console so users can tell why
+      // an icon ended up as a grey placeholder. Common cause: SVG bytes
+      // reaching `figma.createImage`, which only accepts PNG / JPEG / GIF.
+      console.warn(
+        `[HTMLoom] image creation failed for "${node.label || node.tag}" (src=${node.imageSrc.slice(0, 80)}…):`,
+        err,
+      );
     }
   }
   rect.fills = [{ type: "SOLID", color: { r: 0.9, g: 0.9, b: 0.9 }, opacity: 1 }];

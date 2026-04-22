@@ -169,36 +169,75 @@ async function tryRasterizeSvg(
   try {
     return await rasterizeSvg(src, width, height);
   } catch (err) {
-    console.warn("[HTMLoom] SVG rasterisation failed; falling back:", err);
+    // Surface to console so users can see why an icon ended up as a grey
+    // placeholder instead of silently swallowing.
+    console.warn(
+      `[HTMLoom] SVG rasterisation failed (size=${width}×${height}, src=${src.slice(0, 80)}…):`,
+      err,
+    );
     return null;
   }
 }
 
 /**
  * Loads an SVG (data URI or remote URL) into an `<img>`, draws it onto a
- * 2x-scaled canvas, and exports a PNG data URI. Remote URLs require either
- * same-origin or CORS-friendly headers — when CORS taints the canvas, the
- * `toDataURL` call throws and we fall back to the original (broken) source.
+ * 2x-scaled canvas, and exports a PNG data URI.
+ *
+ * For SVG data URIs we re-wrap the markup as a `Blob` and load via
+ * `URL.createObjectURL`. Some browsers (and most plugin sandboxes) refuse
+ * to render `<img src="data:image/svg+xml;...">` for security reasons,
+ * even though the data is same-origin — the Blob URL bypasses the heuristic.
+ *
+ * Remote URLs require either same-origin or CORS-friendly headers; when
+ * CORS taints the canvas, `toDataURL` throws and we fall back to the
+ * original (broken) source.
  */
 async function rasterizeSvg(src: string, width: number, height: number): Promise<string> {
   const targetW = Math.max(1, Math.round(width || 32));
   const targetH = Math.max(1, Math.round(height || 32));
-  const img = new Image();
-  if (!src.startsWith("data:")) img.crossOrigin = "anonymous";
-  await new Promise<void>((resolve, reject) => {
-    img.onload = () => resolve();
-    img.onerror = () => reject(new Error(`image load failed: ${src.slice(0, 80)}…`));
-    img.src = src;
-  });
-  // 2x scale so SVG icons stay sharp at the captured layer's native size.
-  const scale = 2;
-  const canvas = document.createElement("canvas");
-  canvas.width = targetW * scale;
-  canvas.height = targetH * scale;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("2D context unavailable");
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/png");
+
+  let loadSrc = src;
+  let revoke: (() => void) | null = null;
+  if (src.startsWith("data:image/svg")) {
+    const svgText = decodeSvgDataUri(src);
+    const blob = new Blob([svgText], { type: "image/svg+xml" });
+    loadSrc = URL.createObjectURL(blob);
+    revoke = () => URL.revokeObjectURL(loadSrc);
+  }
+
+  try {
+    const img = new Image();
+    if (!src.startsWith("data:")) img.crossOrigin = "anonymous";
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = (e) =>
+        reject(
+          new Error(
+            `image load failed (${typeof e === "string" ? e : "onerror"}): ${src.slice(0, 80)}…`,
+          ),
+        );
+      img.src = loadSrc;
+    });
+    // 2x scale so SVG icons stay sharp at the captured layer's native size.
+    const scale = 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = targetW * scale;
+    canvas.height = targetH * scale;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("2D context unavailable");
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  } finally {
+    if (revoke) revoke();
+  }
+}
+
+function decodeSvgDataUri(src: string): string {
+  const comma = src.indexOf(",");
+  const meta = src.slice(0, comma);
+  const data = src.slice(comma + 1);
+  if (meta.includes(";base64")) return atob(data);
+  return decodeURIComponent(data);
 }
 
 function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | null {
@@ -965,6 +1004,27 @@ function resolveImageSrc(el: HTMLElement): string | null {
     // matching their on-page look.
     const resolvedColor = window.getComputedStyle(el).color || "currentColor";
     const cloned = el.cloneNode(true) as SVGElement;
+
+    // XMLSerializer doesn't always emit the SVG namespace declaration when
+    // the source element lives in an HTML document — without `xmlns` the
+    // resulting markup loads as an empty image when fed back to `<img>`.
+    if (!cloned.getAttribute("xmlns")) {
+      cloned.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    }
+    // If the source has no width/height attrs (e.g. authors that rely on
+    // CSS sizing), the loaded image collapses to 0×0. Fall back to the
+    // viewBox dimensions when present so the rasteriser has something to draw.
+    if (!cloned.getAttribute("width") || !cloned.getAttribute("height")) {
+      const vb = cloned.getAttribute("viewBox");
+      if (vb) {
+        const parts = vb.split(/[\s,]+/).map(parseFloat);
+        if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+          cloned.setAttribute("width", String(parts[2]));
+          cloned.setAttribute("height", String(parts[3]));
+        }
+      }
+    }
+
     substituteCurrentColor(cloned, resolvedColor);
     const serializer = new XMLSerializer();
     const xml = serializer.serializeToString(cloned);
