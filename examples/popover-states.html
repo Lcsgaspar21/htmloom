@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>HTMLoom — popover states</title>
+    <style>
+      :root {
+        --fg: #1f2024;
+        --muted: #6b7280;
+        --line: #e5e7eb;
+        --bg: #f6f7f9;
+        --accent: #6e56cf;
+        --high: #ea580c;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 48px;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      h1 { font-size: 16px; font-weight: 600; margin: 0 0 24px; }
+      [data-figma-component] {
+        display: flex;
+        flex-direction: row;
+        gap: 32px;
+        align-items: flex-start;
+      }
+      [data-figma-variant] {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 16px;
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        width: 280px;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: var(--high);
+        color: white;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        align-self: flex-start;
+      }
+      .label { color: var(--muted); font-size: 11px; }
+      .popover {
+        margin-top: 12px;
+        padding: 12px 14px;
+        background: #1f2024;
+        color: white;
+        border-radius: 8px;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      .popover strong { display: block; margin-bottom: 4px; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <h1>Alert badge — click to expand</h1>
+
+    <div data-figma-component="alert-badge-popover">
+      <div data-figma-variant="default">
+        <span class="label">Default state</span>
+        <span class="badge" data-figma-on-click="expanded">High priority</span>
+      </div>
+
+      <div data-figma-variant="expanded">
+        <span class="label">Expanded state</span>
+        <span class="badge" data-figma-on-click="default">High priority</span>
+        <div class="popover">
+          <strong>Per-target severity</strong>
+          Mid base × High alert impact = High. Click the badge to collapse.
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

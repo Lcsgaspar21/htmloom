@@ -13,13 +13,26 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
 - [ ] First end-to-end test against `examples/alert-priority-wireframe.html`
 - [ ] Manual QA on 3 hand-picked HTML pages (light/dark, simple/complex)
 
-## Phase 2 — Interactive states
+## Phase 2 — Interactive states ✓
 
-- [ ] Read `data-figma-state="hover|click|expanded|…"` markers from HTML
-- [ ] Re-render the same root in each state and capture all variants
-- [ ] Emit a Figma Component Set with one Variant per state
-- [ ] Build Reactions (`setReactionsAsync`) for declared transitions
-  (e.g. `data-figma-trigger="click" data-figma-target="popover"`)
+- [x] Read `data-figma-component` / `data-figma-variant` markers from HTML
+- [x] Force-visible inactive variants during capture (designers can use `display: none`)
+- [x] Each variant captured as its own root subtree (local coordinates)
+- [x] Emit a Figma Component Set with one Variant per state (`State=<name>`)
+- [x] Build Reactions (`setReactionsAsync`) for declared transitions:
+  - `data-figma-on-click="<variant>"`
+  - `data-figma-on-press="<variant>"`
+  - `data-figma-on-hover="<variant>"` (alias for MOUSE_ENTER)
+  - `data-figma-on-mouse-enter="<variant>"`
+  - `data-figma-on-mouse-leave="<variant>"`
+- [x] `examples/popover-states.html` covering the click-to-expand pattern
+
+### Known limits to revisit
+
+- A trigger placed on the variant root re-resolves to the resulting Component
+  node (handled), but reactions on a node that is itself replaced by Figma's
+  variant machinery won't fire — keep triggers on inner elements.
+- Only INSTANT transitions are emitted; easing presets land in Phase 3.
 
 ## Phase 3 — Fidelity boost
 

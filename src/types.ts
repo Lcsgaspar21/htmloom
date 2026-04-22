@@ -64,6 +64,30 @@ export interface TextStyle {
 
 export type NodeKind = "FRAME" | "TEXT" | "RECT" | "IMAGE";
 
+/** Trigger events we map onto Figma's prototype Reaction triggers. */
+export type TriggerEvent =
+  | "ON_CLICK"
+  | "ON_PRESS"
+  | "MOUSE_ENTER"
+  | "MOUSE_LEAVE";
+
+export interface TriggerSpec {
+  event: TriggerEvent;
+  /** Variant name (within the enclosing component) to switch to. */
+  targetVariant: string;
+}
+
+export interface VariantSpec {
+  name: string;
+  tree: CapturedNode;
+}
+
+export interface ComponentSpec {
+  /** Becomes the Component Set's name in Figma. */
+  name: string;
+  variants: VariantSpec[];
+}
+
 export interface CapturedNode {
   /** Stable id derived from the DOM path, used for prototype targets later. */
   id: string;
@@ -82,6 +106,14 @@ export interface CapturedNode {
   /** Resolved absolute URL when kind === "IMAGE". */
   imageSrc: string | null;
   children: CapturedNode[];
+  /**
+   * Set when the source element carried `data-figma-component`. The builder
+   * turns this node into a Figma Component Set instead of a regular Frame.
+   * `children` is ignored for component nodes — variants drive the build.
+   */
+  component: ComponentSpec | null;
+  /** Triggers declared via `data-figma-on-*` attributes. */
+  triggers: TriggerSpec[];
 }
 
 export interface CaptureResult {

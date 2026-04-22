@@ -9,31 +9,56 @@ import type {
   AutoLayoutHint,
   CaptureResult,
   CapturedNode,
+  ComponentSpec,
   RGBA,
   TextStyle,
+  TriggerEvent,
+  TriggerSpec,
 } from "./types";
 
 const FALLBACK_FONT: FontName = { family: "Inter", style: "Regular" };
 const loadedFonts = new Set<string>();
 
-export async function buildFromCapture(capture: CaptureResult): Promise<FrameNode> {
+interface BuildContext {
+  /** Maps CapturedNode.id → the Figma SceneNode we materialised for it. */
+  nodeIdMap: Map<string, SceneNode>;
+  /**
+   * For each CapturedNode that owns a component (the Component Set parent),
+   * the variant components keyed by variant name — used to resolve trigger
+   * targets in the post-pass.
+   */
+  variantSets: Map<string, Map<string, ComponentNode>>;
+}
+
+export async function buildFromCapture(capture: CaptureResult): Promise<SceneNode> {
   await figma.loadFontAsync(FALLBACK_FONT);
   loadedFonts.add(fontKey(FALLBACK_FONT));
 
   await preloadFonts(capture.tree);
 
-  const root = await createNodeFor(capture.tree, true);
+  const ctx: BuildContext = {
+    nodeIdMap: new Map(),
+    variantSets: new Map(),
+  };
+
+  const root = await createNodeFor(capture.tree, true, ctx);
   root.name = capture.rootName || "HTMLoom Import";
+
+  // Wire prototype reactions only after every variant component exists, so
+  // trigger targets resolve in a single deterministic pass.
+  await wireReactions(capture.tree, null, ctx);
 
   // Drop the import next to the viewport so the user finds it immediately.
   const viewport = figma.viewport.center;
-  root.x = Math.round(viewport.x - root.width / 2);
-  root.y = Math.round(viewport.y - root.height / 2);
+  if ("x" in root && "y" in root && "width" in root && "height" in root) {
+    root.x = Math.round(viewport.x - (root as FrameNode).width / 2);
+    root.y = Math.round(viewport.y - (root as FrameNode).height / 2);
+  }
 
   figma.currentPage.appendChild(root);
   figma.currentPage.selection = [root];
   figma.viewport.scrollAndZoomIntoView([root]);
-  return root as FrameNode;
+  return root;
 }
 
 async function preloadFonts(node: CapturedNode): Promise<void> {
@@ -52,21 +77,41 @@ async function preloadFonts(node: CapturedNode): Promise<void> {
   for (const child of node.children) await preloadFonts(child);
 }
 
-async function createNodeFor(node: CapturedNode, isRoot = false): Promise<SceneNode> {
+async function createNodeFor(
+  node: CapturedNode,
+  isRoot: boolean,
+  ctx: BuildContext,
+): Promise<SceneNode> {
+  if (node.component) {
+    const set = await buildComponentSet(node, node.component, ctx);
+    ctx.nodeIdMap.set(node.id, set);
+    return set;
+  }
+  let scene: SceneNode;
   switch (node.kind) {
     case "TEXT":
-      return buildText(node);
+      scene = buildText(node);
+      break;
     case "IMAGE":
-      return await buildImage(node);
+      scene = await buildImage(node);
+      break;
     case "RECT":
-      return buildRect(node);
+      scene = buildRect(node);
+      break;
     case "FRAME":
     default:
-      return await buildFrame(node, isRoot);
+      scene = await buildFrame(node, isRoot, ctx);
+      break;
   }
+  ctx.nodeIdMap.set(node.id, scene);
+  return scene;
 }
 
-async function buildFrame(node: CapturedNode, isRoot: boolean): Promise<FrameNode> {
+async function buildFrame(
+  node: CapturedNode,
+  isRoot: boolean,
+  ctx: BuildContext,
+): Promise<FrameNode> {
   const frame = figma.createFrame();
   frame.name = node.label || node.tag;
   frame.resize(Math.max(1, node.box.width), Math.max(1, node.box.height));
@@ -87,7 +132,7 @@ async function buildFrame(node: CapturedNode, isRoot: boolean): Promise<FrameNod
   }
 
   for (const child of node.children) {
-    const built = await createNodeFor(child);
+    const built = await createNodeFor(child, false, ctx);
     frame.appendChild(built);
     if (!useAutoLayout) {
       built.x = child.box.x;
@@ -100,6 +145,112 @@ async function buildFrame(node: CapturedNode, isRoot: boolean): Promise<FrameNod
     frame.y = 0;
   }
   return frame;
+}
+
+/**
+ * Builds a Figma Component Set from a CapturedNode flagged as a component.
+ * Each variant subtree becomes its own Component, then `combineAsVariants`
+ * merges them. Variant names appear under the "State" property in Figma.
+ */
+async function buildComponentSet(
+  owner: CapturedNode,
+  spec: ComponentSpec,
+  ctx: BuildContext,
+): Promise<ComponentSetNode> {
+  const components: ComponentNode[] = [];
+  const variantMap = new Map<string, ComponentNode>();
+
+  for (const variant of spec.variants) {
+    // Each variant tree is treated as a sub-root frame.
+    const variantFrame = await buildFrame(variant.tree, true, ctx);
+    figma.currentPage.appendChild(variantFrame);
+
+    const component = figma.createComponentFromNode(variantFrame);
+    component.name = `State=${variant.name}`;
+    components.push(component);
+    variantMap.set(variant.name, component);
+
+    // The captured root id of the variant now corresponds to the component itself,
+    // not the (now-replaced) frame. Re-register so triggers on the variant root
+    // can still find their scene node.
+    ctx.nodeIdMap.set(variant.tree.id, component);
+  }
+
+  const set = figma.combineAsVariants(components, figma.currentPage);
+  set.name = spec.name;
+  ctx.variantSets.set(owner.id, variantMap);
+
+  // Mirror the source element's footprint so the parent frame allocates
+  // enough room when the set is later appended.
+  set.resize(Math.max(1, owner.box.width || set.width), Math.max(1, owner.box.height || set.height));
+  return set;
+}
+
+/* ---------- prototype reactions (post-pass) ---------- */
+
+async function wireReactions(
+  node: CapturedNode,
+  ambientComponentId: string | null,
+  ctx: BuildContext,
+): Promise<void> {
+  if (node.triggers.length > 0 && ambientComponentId) {
+    await applyReactions(node, ambientComponentId, ctx);
+  }
+
+  if (node.component) {
+    for (const variant of node.component.variants) {
+      // Triggers inside a variant resolve against the owning component's variant set.
+      await wireReactions(variant.tree, node.id, ctx);
+    }
+    return;
+  }
+
+  for (const child of node.children) {
+    await wireReactions(child, ambientComponentId, ctx);
+  }
+}
+
+async function applyReactions(
+  node: CapturedNode,
+  ambientComponentId: string,
+  ctx: BuildContext,
+): Promise<void> {
+  const variantMap = ctx.variantSets.get(ambientComponentId);
+  const sceneNode = ctx.nodeIdMap.get(node.id);
+  if (!variantMap || !sceneNode) return;
+  if (!("setReactionsAsync" in sceneNode)) return;
+
+  const reactions: Reaction[] = [];
+  for (const trigger of node.triggers) {
+    const dest = variantMap.get(trigger.targetVariant);
+    if (!dest) {
+      console.warn(
+        `[HTMLoom] Trigger target variant "${trigger.targetVariant}" not found; skipping.`,
+      );
+      continue;
+    }
+    reactions.push(buildReaction(trigger.event, dest.id));
+  }
+  if (reactions.length > 0) {
+    await (sceneNode as SceneNode & {
+      setReactionsAsync: (r: Reaction[]) => Promise<void>;
+    }).setReactionsAsync(reactions);
+  }
+}
+
+function buildReaction(event: TriggerEvent, destinationId: string): Reaction {
+  return {
+    trigger: { type: event } as Trigger,
+    actions: [
+      {
+        type: "NODE",
+        destinationId,
+        navigation: "CHANGE_TO",
+        transition: null,
+        preserveScrollPosition: false,
+      } as Action,
+    ],
+  } as Reaction;
 }
 
 function buildText(node: CapturedNode): TextNode {

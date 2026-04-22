@@ -6,7 +6,7 @@ HTMLoom is a self-contained Figma plugin. It loads HTML in its own sandboxed ifr
 
 ## Status
 
-**Phase 1 — MVP (current).** Single-state import:
+**Phase 1 — MVP.** Single-state import:
 
 - File drop, file picker, or paste HTML
 - DOM → tree capture with computed styles and bounds
@@ -15,7 +15,32 @@ HTMLoom is a self-contained Figma plugin. It loads HTML in its own sandboxed ifr
 - Text, solid backgrounds, borders, corner radius, opacity
 - Inline `<svg>` and `<img>` (data URIs and external URLs)
 
-Phases 2–4 (interactive states with Variants + Reactions, gradients, advanced typography, design-token import) are planned in `docs/ROADMAP.md`.
+**Phase 2 — Interactive states.** Component Sets + Reactions from HTML attributes:
+
+- `data-figma-component="<name>"` → Component Set
+- Children with `data-figma-variant="<name>"` → one Variant each (`State=<name>` property)
+- Triggers via `data-figma-on-click | -on-press | -on-hover | -on-mouse-enter | -on-mouse-leave`
+- Inactive variants can use `display: none`; the walker forces visibility only during capture
+
+Phases 3–4 (gradients, shadows, mixed text runs, design-token bridge) are tracked in `docs/ROADMAP.md`.
+
+### Authoring API (Phase 2)
+
+```html
+<div data-figma-component="alert-badge-popover">
+  <div data-figma-variant="default">
+    <span class="badge" data-figma-on-click="expanded">High priority</span>
+  </div>
+  <div data-figma-variant="expanded">
+    <span class="badge" data-figma-on-click="default">High priority</span>
+    <div class="popover">…</div>
+  </div>
+</div>
+```
+
+After import you get a Figma Component Set named `alert-badge-popover` with two
+variants and a click reaction wired between them — drop an Instance into a
+prototype and it just works.
 
 ## Develop
 
@@ -33,13 +58,14 @@ In Figma desktop:
 
 ## Try it
 
-The repo ships an example file used during development:
+The repo ships two examples used during development:
 
 ```
-examples/alert-priority-wireframe.html
+examples/alert-priority-wireframe.html   # Phase 1 — static layout
+examples/popover-states.html             # Phase 2 — interactive variants
 ```
 
-Drop it onto the plugin window to verify your local build.
+Drop either onto the plugin window to verify your local build.
 
 ## Architecture (one paragraph)
 

@@ -12,10 +12,14 @@ import type {
   BoxModel,
   CaptureResult,
   CapturedNode,
+  ComponentSpec,
   NodeKind,
   Padding,
   RGBA,
   TextStyle,
+  TriggerEvent,
+  TriggerSpec,
+  VariantSpec,
 } from "./types";
 
 const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "META", "LINK", "NOSCRIPT", "HEAD"]);
@@ -63,14 +67,15 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
   const directText = directTextContent(el);
   if (box.width === 0 && box.height === 0 && !directText) return null;
 
+  const componentName = el.getAttribute("data-figma-component");
   const kind = inferKind(el, directText);
   const layout = detectAutoLayout(el, style);
 
   const node: CapturedNode = {
     id: path,
-    kind,
+    kind: componentName ? "FRAME" : kind,
     tag: el.tagName.toLowerCase(),
-    label: pickLabel(el),
+    label: componentName || pickLabel(el),
     box,
     padding: parsePadding(style),
     background: parseBackground(style),
@@ -86,12 +91,15 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     },
     opacity: parseFloat(style.opacity || "1"),
     layout,
-    text: kind === "TEXT" ? buildTextStyle(el, style, directText) : null,
-    imageSrc: kind === "IMAGE" ? resolveImageSrc(el) : null,
+    text: kind === "TEXT" && !componentName ? buildTextStyle(el, style, directText) : null,
+    imageSrc: kind === "IMAGE" && !componentName ? resolveImageSrc(el) : null,
     children: [],
+    component: componentName ? captureComponent(el, componentName, path) : null,
+    triggers: parseTriggers(el),
   };
 
-  if (kind === "FRAME") {
+  // Components are driven by their variants; ignore raw children.
+  if (kind === "FRAME" && !componentName) {
     let i = 0;
     for (const child of Array.from(el.children) as HTMLElement[]) {
       const captured = walk(child, root, `${path}.${i++}`);
@@ -100,6 +108,72 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
   }
 
   return node;
+}
+
+/**
+ * Walks `data-figma-variant` children of a component element, capturing each
+ * variant as its own root subtree. Forces variant elements visible during
+ * capture so designers are free to hide inactive variants with `display:none`.
+ */
+function captureComponent(el: HTMLElement, name: string, path: string): ComponentSpec {
+  const variants: VariantSpec[] = [];
+  let i = 0;
+  for (const child of Array.from(el.children) as HTMLElement[]) {
+    const variantName = child.getAttribute("data-figma-variant");
+    if (!variantName) continue;
+
+    const restore = forceVisible(child);
+    try {
+      // Each variant is its own root so child boxes are local to it.
+      const tree = walk(child, child, `${path}/c=${name}/v=${variantName}`);
+      if (tree) variants.push({ name: variantName, tree });
+    } finally {
+      restore();
+    }
+    i++;
+  }
+  if (variants.length === 0) {
+    throw new Error(
+      `HTMLoom: component "${name}" has no children with data-figma-variant`,
+    );
+  }
+  return { name, variants };
+}
+
+function forceVisible(el: HTMLElement): () => void {
+  const prevDisplay = el.style.display;
+  const prevVisibility = el.style.visibility;
+  const prevOpacity = el.style.opacity;
+  const computed = window.getComputedStyle(el);
+  if (computed.display === "none") el.style.display = "block";
+  if (computed.visibility === "hidden") el.style.visibility = "visible";
+  if (computed.opacity === "0") el.style.opacity = "1";
+  // Force a synchronous layout flush before the caller measures.
+  void el.offsetHeight;
+  return () => {
+    el.style.display = prevDisplay;
+    el.style.visibility = prevVisibility;
+    el.style.opacity = prevOpacity;
+  };
+}
+
+/* ---------- triggers ---------- */
+
+const TRIGGER_ATTRS: Array<[string, TriggerEvent]> = [
+  ["data-figma-on-click", "ON_CLICK"],
+  ["data-figma-on-press", "ON_PRESS"],
+  ["data-figma-on-hover", "MOUSE_ENTER"],
+  ["data-figma-on-mouse-enter", "MOUSE_ENTER"],
+  ["data-figma-on-mouse-leave", "MOUSE_LEAVE"],
+];
+
+function parseTriggers(el: HTMLElement): TriggerSpec[] {
+  const out: TriggerSpec[] = [];
+  for (const [attr, event] of TRIGGER_ATTRS) {
+    const target = el.getAttribute(attr);
+    if (target) out.push({ event, targetVariant: target });
+  }
+  return out;
 }
 
 /* ---------- helpers ---------- */
