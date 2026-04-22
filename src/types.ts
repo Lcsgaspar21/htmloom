@@ -96,12 +96,13 @@ export interface ColorStop {
 }
 
 /**
- * Linear gradient parsed from a CSS `background-image: linear-gradient(...)`.
- * Radial gradients are detected but not yet emitted (Phase 4).
+ * Gradient parsed from a CSS `background-image`. Linear and radial are
+ * supported; radial uses closest-side / centered semantics regardless of
+ * the source CSS shape and position keywords.
  */
 export interface Gradient {
-  type: "LINEAR";
-  /** CSS angle convention: 0 = "to top", 90 = "to right". */
+  type: "LINEAR" | "RADIAL";
+  /** CSS angle convention: 0 = "to top", 90 = "to right". Ignored for RADIAL. */
   angleDeg: number;
   stops: ColorStop[];
 }
@@ -157,8 +158,10 @@ export interface CapturedNode {
   text: TextStyle | null;
   /** Resolved absolute URL when kind === "IMAGE". */
   imageSrc: string | null;
-  /** Linear gradient parsed from `background-image`; takes priority over `background`. */
+  /** Linear or radial gradient parsed from `background-image`. */
   gradient: Gradient | null;
+  /** URL from `background-image: url(...)` on a non-img element; layers above gradient/solid. */
+  backgroundImageUrl: string | null;
   /** Multi-layer CSS box-shadows mapped to Figma effects. */
   shadows: Shadow[];
   children: CapturedNode[];
@@ -172,10 +175,28 @@ export interface CapturedNode {
   triggers: TriggerSpec[];
 }
 
+/**
+ * One CSS custom property (`--brand: #6e56cf`) discovered on `:root`. The
+ * builder turns each colour-typed token into a Figma Variable inside the
+ * `HTMLoom Tokens` collection and auto-binds matching solid fills.
+ */
+export interface DesignToken {
+  /** Variable name in Figma (CSS `-` becomes `/` so `--color-brand-500` -> `color/brand/500`). */
+  name: string;
+  /** Original CSS property name, kept for debugging (e.g. `--brand`). */
+  cssName: string;
+  /** Raw resolved value as returned by `getComputedStyle`. */
+  value: string;
+  /** Parsed colour, when the value resolves to one. Non-colour tokens are kept for debugging only. */
+  resolvedColor: RGBA | null;
+}
+
 export interface CaptureResult {
   rootName: string;
   viewport: { width: number; height: number };
   tree: CapturedNode;
+  /** CSS custom properties found on `:root`; empty when the page declares none. */
+  tokens: DesignToken[];
 }
 
 /** Messages flowing UI -> main. */

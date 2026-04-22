@@ -10,6 +10,7 @@ import type {
   CaptureResult,
   CapturedNode,
   ComponentSpec,
+  DesignToken,
   Gradient,
   RGBA,
   Shadow,
@@ -20,6 +21,7 @@ import type {
 } from "./types";
 
 const FALLBACK_FONT: FontName = { family: "Inter", style: "Regular" };
+const TOKEN_COLLECTION_NAME = "HTMLoom Tokens";
 const loadedFonts = new Set<string>();
 
 interface BuildContext {
@@ -31,6 +33,12 @@ interface BuildContext {
    * targets in the post-pass.
    */
   variantSets: Map<string, Map<string, ComponentNode>>;
+  /**
+   * `r,g,b,a` key → Figma colour Variable. Built once per import from the
+   * page's CSS custom properties so SOLID fills with matching colour values
+   * end up bound to the variable instead of using a literal RGBA.
+   */
+  colorBindings: Map<string, Variable>;
 }
 
 export async function buildFromCapture(capture: CaptureResult): Promise<SceneNode> {
@@ -42,6 +50,7 @@ export async function buildFromCapture(capture: CaptureResult): Promise<SceneNod
   const ctx: BuildContext = {
     nodeIdMap: new Map(),
     variantSets: new Map(),
+    colorBindings: await buildColorBindings(capture.tokens),
   };
 
   const root = await createNodeFor(capture.tree, true, ctx);
@@ -103,13 +112,13 @@ async function createNodeFor(
   let scene: SceneNode;
   switch (node.kind) {
     case "TEXT":
-      scene = buildText(node);
+      scene = buildText(node, ctx);
       break;
     case "IMAGE":
       scene = await buildImage(node);
       break;
     case "RECT":
-      scene = buildRect(node);
+      scene = await buildRect(node, ctx);
       break;
     case "FRAME":
     default:
@@ -128,7 +137,7 @@ async function buildFrame(
   const frame = figma.createFrame();
   frame.name = node.label || node.tag;
   frame.resize(Math.max(1, node.box.width), Math.max(1, node.box.height));
-  applyVisuals(frame, node);
+  await applyVisuals(frame, node, ctx);
 
   const useAutoLayout = node.layout.mode !== "NONE" && node.layout.confidence >= 0.6;
   if (useAutoLayout) {
@@ -295,7 +304,7 @@ function buildTrigger(event: TriggerEvent): Trigger {
   return { type: event } as Trigger;
 }
 
-function buildText(node: CapturedNode): TextNode {
+function buildText(node: CapturedNode, ctx: BuildContext): TextNode {
   const t = node.text!;
   const text = figma.createText();
   const baseFont = resolveFont(t.fontFamily, t.fontWeight, t.italic);
@@ -305,15 +314,15 @@ function buildText(node: CapturedNode): TextNode {
   text.textAlignHorizontal = t.textAlign === "JUSTIFIED" ? "JUSTIFIED" : t.textAlign;
   if (t.lineHeight) text.lineHeight = { value: t.lineHeight, unit: "PIXELS" };
   if (t.letterSpacing) text.letterSpacing = { value: t.letterSpacing, unit: "PIXELS" };
-  text.fills = [{ type: "SOLID", color: rgb(t.color), opacity: t.color.a }];
+  text.fills = [bindSolid(t.color, ctx)];
   if (t.textDecoration !== "NONE") text.textDecoration = t.textDecoration;
   text.name = node.label || "text";
   text.resize(Math.max(1, node.box.width), Math.max(1, node.box.height));
-  if (t.runs) applyTextRuns(text, t.runs);
+  if (t.runs) applyTextRuns(text, t.runs, ctx);
   return text;
 }
 
-function applyTextRuns(text: TextNode, runs: TextRun[]): void {
+function applyTextRuns(text: TextNode, runs: TextRun[], ctx: BuildContext): void {
   for (const run of runs) {
     if (run.start >= run.end) continue;
     const font = resolveFont(run.fontFamily, run.fontWeight, run.italic);
@@ -323,9 +332,7 @@ function applyTextRuns(text: TextNode, runs: TextRun[]): void {
       // Font not loaded for this range — leave as the base font.
     }
     text.setRangeFontSize(run.start, run.end, run.fontSize);
-    text.setRangeFills(run.start, run.end, [
-      { type: "SOLID", color: rgb(run.color), opacity: run.color.a },
-    ]);
+    text.setRangeFills(run.start, run.end, [bindSolid(run.color, ctx)]);
     if (run.textDecoration !== "NONE") {
       text.setRangeTextDecoration(run.start, run.end, run.textDecoration);
     }
@@ -364,30 +371,36 @@ async function buildImage(node: CapturedNode): Promise<SceneNode> {
   return rect;
 }
 
-function buildRect(node: CapturedNode): RectangleNode {
+async function buildRect(node: CapturedNode, ctx: BuildContext): Promise<RectangleNode> {
   const rect = figma.createRectangle();
   rect.name = node.label || "rect";
   rect.resize(Math.max(1, node.box.width), Math.max(1, node.box.height));
-  applyVisuals(rect, node);
+  await applyVisuals(rect, node, ctx);
   return rect;
 }
 
 /* ---------- shared visuals ---------- */
 
-function applyVisuals(node: FrameNode | RectangleNode, source: CapturedNode): void {
+async function applyVisuals(
+  node: FrameNode | RectangleNode,
+  source: CapturedNode,
+  ctx: BuildContext,
+): Promise<void> {
   const fills: Paint[] = [];
   if (source.background) {
-    fills.push({ type: "SOLID", color: rgb(source.background), opacity: source.background.a });
+    fills.push(bindSolid(source.background, ctx));
   }
   if (source.gradient) {
     fills.push(buildGradientPaint(source.gradient));
   }
+  if (source.backgroundImageUrl) {
+    const imagePaint = await buildImagePaint(source.backgroundImageUrl);
+    if (imagePaint) fills.push(imagePaint);
+  }
   (node as FrameNode).fills = fills;
 
   if (source.border.width > 0 && source.border.color) {
-    (node as FrameNode).strokes = [
-      { type: "SOLID", color: rgb(source.border.color), opacity: source.border.color.a },
-    ];
+    (node as FrameNode).strokes = [bindSolid(source.border.color, ctx)];
     (node as FrameNode).strokeWeight = source.border.width;
   }
 
@@ -399,14 +412,97 @@ function applyVisuals(node: FrameNode | RectangleNode, source: CapturedNode): vo
   node.opacity = source.opacity;
 }
 
+/* ---------- design token bridge ---------- */
+
+/**
+ * Walks the captured tokens, ensures the `HTMLoom Tokens` collection exists,
+ * and creates one Color variable per token whose value resolves to a colour.
+ * Returns a colour-keyed lookup that `bindSolid` consults when emitting fills.
+ */
+async function buildColorBindings(tokens: DesignToken[]): Promise<Map<string, Variable>> {
+  const colorTokens = tokens.filter((t): t is DesignToken & { resolvedColor: RGBA } =>
+    t.resolvedColor !== null,
+  );
+  if (colorTokens.length === 0) return new Map();
+
+  const collection = await getOrCreateCollection(TOKEN_COLLECTION_NAME);
+  const modeId = collection.defaultModeId || collection.modes[0].modeId;
+  const existingVariables = await figma.variables.getLocalVariablesAsync("COLOR");
+  const byName = new Map<string, Variable>();
+  for (const v of existingVariables) {
+    if (v.variableCollectionId === collection.id) byName.set(v.name, v);
+  }
+
+  const bindings = new Map<string, Variable>();
+  for (const token of colorTokens) {
+    let variable = byName.get(token.name);
+    if (!variable) {
+      variable = figma.variables.createVariable(token.name, collection, "COLOR");
+    }
+    variable.setValueForMode(modeId, {
+      r: token.resolvedColor.r,
+      g: token.resolvedColor.g,
+      b: token.resolvedColor.b,
+      a: token.resolvedColor.a,
+    });
+    // First token to claim a colour wins — predictable and deterministic when
+    // multiple tokens hold the same value.
+    const key = colorKey(token.resolvedColor);
+    if (!bindings.has(key)) bindings.set(key, variable);
+  }
+  return bindings;
+}
+
+async function getOrCreateCollection(name: string): Promise<VariableCollection> {
+  const all = await figma.variables.getLocalVariableCollectionsAsync();
+  const existing = all.find((c) => c.name === name);
+  if (existing) return existing;
+  return figma.variables.createVariableCollection(name);
+}
+
+/**
+ * Returns a SolidPaint for the given colour. When a Variable matches the
+ * exact RGBA, the paint is bound to that Variable so future edits to the
+ * token value flow through the imported design.
+ */
+function bindSolid(color: RGBA, ctx: BuildContext): SolidPaint {
+  const paint: SolidPaint = { type: "SOLID", color: rgb(color), opacity: color.a };
+  const variable = ctx.colorBindings.get(colorKey(color));
+  if (!variable) return paint;
+  return figma.variables.setBoundVariableForPaint(paint, "color", variable);
+}
+
+function colorKey(c: RGBA): string {
+  return `${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},${c.a.toFixed(3)}`;
+}
+
+async function buildImagePaint(url: string): Promise<ImagePaint | null> {
+  try {
+    const bytes = await fetchImageBytes(url);
+    const image = figma.createImage(bytes);
+    return { type: "IMAGE", scaleMode: "FILL", imageHash: image.hash };
+  } catch (err) {
+    console.warn(`[HTMLoom] background-image fetch failed for ${url}:`, err);
+    return null;
+  }
+}
+
 function buildGradientPaint(g: Gradient): GradientPaint {
+  const stops = g.stops.map((s) => ({
+    position: clamp01(s.position),
+    color: { r: s.color.r, g: s.color.g, b: s.color.b, a: s.color.a },
+  }));
+  if (g.type === "RADIAL") {
+    return {
+      type: "GRADIENT_RADIAL",
+      gradientTransform: radialGradientTransform(),
+      gradientStops: stops,
+    };
+  }
   return {
     type: "GRADIENT_LINEAR",
-    gradientTransform: gradientTransform(g.angleDeg),
-    gradientStops: g.stops.map((s) => ({
-      position: clamp01(s.position),
-      color: { r: s.color.r, g: s.color.g, b: s.color.b, a: s.color.a },
-    })),
+    gradientTransform: linearGradientTransform(g.angleDeg),
+    gradientStops: stops,
   };
 }
 
@@ -415,7 +511,7 @@ function buildGradientPaint(g: Gradient): GradientPaint {
  * the fill's bounding box. (0,0) -> start, (1,0) -> end, with the
  * perpendicular axis kept unit-length so the gradient line is centered.
  */
-function gradientTransform(angleDeg: number): Transform {
+function linearGradientTransform(angleDeg: number): Transform {
   const rad = (angleDeg * Math.PI) / 180;
   const dx = Math.sin(rad);
   const dy = -Math.cos(rad);
@@ -424,6 +520,18 @@ function gradientTransform(angleDeg: number): Transform {
   return [
     [dx, -dy, startX],
     [dy, dx, startY],
+  ];
+}
+
+/**
+ * Closest-side ellipse centered on the fill bbox: gradient unit (0,0) is
+ * the box centre, (1,0) is the right midpoint, (0,1) is the bottom midpoint.
+ * CSS shape / size / position keywords are intentionally not honoured.
+ */
+function radialGradientTransform(): Transform {
+  return [
+    [0.5, 0, 0.5],
+    [0, 0.5, 0.5],
   ];
 }
 

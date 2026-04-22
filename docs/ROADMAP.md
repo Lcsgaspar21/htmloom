@@ -84,12 +84,52 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
   italic style for the requested family (e.g. some monospace fonts have no
   italic variant).
 
-## Phase 4 — Design token bridge
+## Phase 4 — Design token bridge ✓
 
-- [ ] Optional `data-figma-token="color/brand-500"` mapping
-- [ ] Read CSS custom properties and offer to create matching Figma Variables
-- [ ] Re-bind solid fills / strokes to Variables when names match
-- [ ] Radial gradients + image-URL backgrounds + nested rich-text runs
+- [x] Read CSS custom properties from `:root` and create matching colour
+      Variables in an `HTMLoom Tokens` collection
+- [x] Auto-bind solid fills, strokes, and text-run fills to Variables when
+      the colour value matches a token
+- [x] Reuse the collection and existing variables on re-import (sync, never
+      duplicate)
+- [x] Radial gradients (`radial-gradient(...)`) emitted as `GRADIENT_RADIAL`
+- [x] `background-image: url(...)` on non-`<img>` elements
+- [x] Nested inline runs (`<a><strong>bold link</strong></a>` inside a
+      paragraph) recursed into a single TEXT with one run per leaf
+- [x] `examples/tokens-radial.html` covering tokens, radial fills, URL
+      backgrounds, and nested runs
+
+### Known limits to revisit
+
+- **`figma.createImage` only accepts raster bytes** (PNG / JPG / GIF / WebP).
+  SVG `background-image` URLs (or data URIs) are skipped at build time —
+  the surface fill remains, but the pattern is dropped. Workaround: convert
+  SVG to PNG ahead of import. Proper fix needs a UI-side rasterisation
+  pass (canvas) and is on Phase 5.
+- **Radial gradients always render as a centered closest-side ellipse.**
+  Source `circle`, `farthest-corner`, `at top right` etc. are parsed but
+  ignored — Figma's gradient handles always sit at the box centre.
+- **First token wins on duplicate colour values.** If `--color-text` and
+  `--color-muted` both resolve to the same RGBA, only the first one is
+  bound. Fills with that colour resolve to the first token deterministically.
+- **Only colour tokens are bridged.** `--space-md: 8px` and other value
+  tokens are captured but not turned into Number / String Variables yet.
+- **Nested inline runs lose `text-decoration` from outer elements.** CSS
+  doesn't inherit `text-decoration-line`, so `<a><strong>x</strong></a>`
+  loses the underline on `x`. Workaround: add `text-decoration: inherit`
+  on the inner element, or apply the underline inside.
+- **Variable name collisions across pages** are resolved by reuse (same
+  collection + same name → updated value). Re-importing different HTML with
+  the same `--color-brand` value mutates the shared variable on purpose.
+
+## Phase 5 — On the table
+
+- [ ] `<pre>` / `white-space: pre` (preserve newlines and runs of spaces)
+- [ ] `data-figma-token="color/brand-500"` explicit binding override
+- [ ] Number / String Variables for non-colour tokens (`--space-*`, `--radius-*`)
+- [ ] UI-side SVG → PNG rasterisation so SVG backgrounds round-trip
+- [ ] Aspect-ratio aware linear gradient transform
+- [ ] Honour `text-decoration` propagation through nested inline runs
 
 ## Phase 1 limits exposed by Phase 2 testing
 

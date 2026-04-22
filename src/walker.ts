@@ -14,6 +14,7 @@ import type {
   CapturedNode,
   ColorStop,
   ComponentSpec,
+  DesignToken,
   Gradient,
   NodeKind,
   Padding,
@@ -50,11 +51,43 @@ export function captureDocument(doc: Document, rootSelector = "body"): CaptureRe
   const tree = walk(root, root, "0");
   if (!tree) throw new Error("HTMLoom: root element produced no captured node");
 
+  const tokens = captureTokens(doc);
+
   return {
     rootName: doc.title || "HTMLoom Import",
     viewport,
     tree,
+    tokens,
   };
+}
+
+/**
+ * Walks `:root`'s computed style for CSS custom properties. The browser
+ * already resolves `var(--a)` chains, so the values we surface here are the
+ * final concrete strings (`#6e56cf`, `rgb(110, 86, 207)`, `12px`, ...).
+ */
+function captureTokens(doc: Document): DesignToken[] {
+  const cs = window.getComputedStyle(doc.documentElement);
+  const out: DesignToken[] = [];
+  for (let i = 0; i < cs.length; i++) {
+    const prop = cs.item(i);
+    if (!prop || !prop.startsWith("--")) continue;
+    const value = cs.getPropertyValue(prop).trim();
+    if (!value) continue;
+    out.push({
+      name: tokenName(prop),
+      cssName: prop,
+      value,
+      resolvedColor: parseColor(value),
+    });
+  }
+  return out;
+}
+
+function tokenName(cssProp: string): string {
+  // `--color-brand-500` -> `color/brand/500`. Custom slashes already in the
+  // name (rare but legal in CSS via escaping) survive as-is.
+  return cssProp.replace(/^--/, "").replace(/-/g, "/");
 }
 
 function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | null {
@@ -81,11 +114,15 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
   const padding = parsePadding(style);
   const background = parseBackground(style);
   const gradient = parseGradient(style.backgroundImage);
+  // Skip URL parsing when a gradient was found — CSS allows both, but we
+  // pick gradient as the dominant fill to keep paint stacks short.
+  const backgroundImageUrl = gradient ? null : parseBackgroundImageUrl(style.backgroundImage);
   const shadows = parseShadows(style.boxShadow);
   const borderWidth = parsePx(style.borderTopWidth);
   const hasDecoration =
     background !== null ||
     gradient !== null ||
+    backgroundImageUrl !== null ||
     shadows.length > 0 ||
     borderWidth > 0 ||
     padding.top + padding.right + padding.bottom + padding.left > 0;
@@ -131,6 +168,7 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     text: kind === "TEXT" && !componentName ? textSpec : null,
     imageSrc: kind === "IMAGE" && !componentName ? resolveImageSrc(el) : null,
     gradient,
+    backgroundImageUrl,
     shadows,
     children: [],
     component: componentName ? captureComponent(el, componentName, path) : null,
@@ -176,6 +214,7 @@ function synthesizeTextChild(text: TextStyle, parentPath: string): CapturedNode 
     text,
     imageSrc: null,
     gradient: null,
+    backgroundImageUrl: null,
     shadows: [],
     children: [],
     component: null,
@@ -407,12 +446,20 @@ function isRichTextCandidate(el: HTMLElement, style: CSSStyleDeclaration): boole
   if (display !== "block" && display !== "inline" && display !== "inline-block") {
     return false;
   }
+  return allDescendantsInline(el);
+}
+
+/**
+ * True when every element descendant is an inline tag, displays inline, and
+ * its own descendants pass the same test. Lets `<p>The <a><strong>bold
+ * link</strong></a> here</p>` collapse into one TEXT with three runs.
+ */
+function allDescendantsInline(el: HTMLElement): boolean {
   for (const child of Array.from(el.children) as HTMLElement[]) {
     if (!INLINE_TAGS.has(child.tagName)) return false;
-    // Nested inline elements stay out of scope until Phase 4.
-    if (child.children.length > 0) return false;
     const childDisplay = window.getComputedStyle(child).display;
     if (childDisplay !== "inline" && childDisplay !== "inline-block") return false;
+    if (!allDescendantsInline(child)) return false;
   }
   return true;
 }
@@ -427,21 +474,7 @@ function collectRichText(
   parentStyle: CSSStyleDeclaration,
 ): { characters: string; runs: TextRun[] } {
   const items: RichTextItem[] = [];
-  for (const node of Array.from(el.childNodes)) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      const txt = collapseWhitespace(node.textContent || "");
-      if (!txt) continue;
-      items.push({ text: txt, style: parentStyle });
-      continue;
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) continue;
-    const child = node as HTMLElement;
-    const childStyle = window.getComputedStyle(child);
-    if (childStyle.display === "none") continue;
-    const txt = collapseWhitespace(child.textContent || "");
-    if (!txt) continue;
-    items.push({ text: txt, style: childStyle });
-  }
+  collectRichTextInto(el, parentStyle, items);
 
   // Trim leading whitespace of the first run and trailing of the last,
   // matching how CSS strips boundary whitespace inside text containers.
@@ -459,6 +492,38 @@ function collectRichText(
     runs.push(makeRun(start, characters.length, item.style));
   }
   return { characters, runs };
+}
+
+/**
+ * Walks an inline subtree and pushes one `RichTextItem` per text node, using
+ * the deepest element's style for that range. Recursion lets
+ * `<a><strong>bold link</strong></a>` contribute the strong style for the
+ * inner text while still being detected as one inline run.
+ */
+function collectRichTextInto(
+  el: HTMLElement,
+  currentStyle: CSSStyleDeclaration,
+  items: RichTextItem[],
+): void {
+  for (const node of Array.from(el.childNodes)) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const txt = collapseWhitespace(node.textContent || "");
+      if (!txt) continue;
+      items.push({ text: txt, style: currentStyle });
+      continue;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) continue;
+    const child = node as HTMLElement;
+    const childStyle = window.getComputedStyle(child);
+    if (childStyle.display === "none") continue;
+    if (child.children.length === 0) {
+      const txt = collapseWhitespace(child.textContent || "");
+      if (!txt) continue;
+      items.push({ text: txt, style: childStyle });
+    } else {
+      collectRichTextInto(child, childStyle, items);
+    }
+  }
 }
 
 function makeRun(start: number, end: number, s: CSSStyleDeclaration): TextRun {
@@ -501,11 +566,35 @@ function parseDecoration(s: CSSStyleDeclaration): TextDecoration {
 
 function parseGradient(backgroundImage: string | null | undefined): Gradient | null {
   if (!backgroundImage || backgroundImage === "none") return null;
-  // Accept only the first linear-gradient layer for now; ignore radial/stacks.
-  const m = backgroundImage.match(/^linear-gradient\(([\s\S]+)\)\s*(?:,|$)/);
-  if (!m) return null;
+  const extracted = extractFirstFunction(backgroundImage);
+  if (!extracted) return null;
+  if (extracted.name === "linear-gradient") return parseLinear(extracted.body);
+  if (extracted.name === "radial-gradient") return parseRadial(extracted.body);
+  return null;
+}
 
-  const parts = splitTopLevelCommas(m[1]);
+/**
+ * Reads the first `name(...)` from a CSS value with proper paren balancing,
+ * so nested `rgba(...)` calls don't fool the regex used for stacked-image lists.
+ */
+function extractFirstFunction(s: string): { name: string; body: string } | null {
+  const m = s.match(/^([a-zA-Z-]+)\(/);
+  if (!m) return null;
+  const name = m[1];
+  const start = m[0].length;
+  let depth = 1;
+  for (let i = start; i < s.length; i++) {
+    if (s[i] === "(") depth++;
+    else if (s[i] === ")") {
+      depth--;
+      if (depth === 0) return { name, body: s.slice(start, i) };
+    }
+  }
+  return null;
+}
+
+function parseLinear(body: string): Gradient | null {
+  const parts = splitTopLevelCommas(body);
   if (parts.length < 2) return null;
 
   let angleDeg = 180;
@@ -520,14 +609,59 @@ function parseGradient(backgroundImage: string | null | undefined): Gradient | n
     stopsStart = 1;
   }
 
+  const stops = collectStops(parts.slice(stopsStart));
+  if (stops.length < 2) return null;
+  return { type: "LINEAR", angleDeg, stops };
+}
+
+function parseRadial(body: string): Gradient | null {
+  const parts = splitTopLevelCommas(body);
+  if (parts.length < 2) return null;
+
+  // CSS radial syntax allows an optional shape/size/position prefix before
+  // the colour stops (e.g. `circle at top right`). We skip any leading
+  // segment that doesn't start with a colour token. Shape and position are
+  // not honoured — the builder always emits a centered closest-side ellipse.
+  const stopParts: string[] = [];
+  let leadingHandled = false;
+  for (const part of parts) {
+    if (!leadingHandled) {
+      if (looksLikeColorStop(part.trim())) leadingHandled = true;
+      else continue;
+    }
+    stopParts.push(part);
+  }
+
+  const stops = collectStops(stopParts.length > 0 ? stopParts : parts);
+  if (stops.length < 2) return null;
+  return { type: "RADIAL", angleDeg: 0, stops };
+}
+
+function looksLikeColorStop(s: string): boolean {
+  return /^(rgba?\(|#|[a-zA-Z]+\s*[\d%.\s]*$)/.test(s);
+}
+
+function collectStops(parts: string[]): ColorStop[] {
   const stops: ColorStop[] = [];
-  for (const part of parts.slice(stopsStart)) {
+  for (const part of parts) {
     const stop = parseColorStop(part.trim());
     if (stop) stops.push(stop);
   }
   fillMissingPositions(stops);
-  if (stops.length < 2) return null;
-  return { type: "LINEAR", angleDeg, stops };
+  return stops;
+}
+
+function parseBackgroundImageUrl(backgroundImage: string | null | undefined): string | null {
+  if (!backgroundImage || backgroundImage === "none") return null;
+  // Try each quoting style independently so URL contents can include the
+  // characters that the other styles use as delimiters (e.g. a double-quoted
+  // data URI may carry single quotes inside an inline SVG attribute).
+  let m = backgroundImage.match(/url\(\s*"([^"]*)"\s*\)/);
+  if (m) return m[1];
+  m = backgroundImage.match(/url\(\s*'([^']*)'\s*\)/);
+  if (m) return m[1];
+  m = backgroundImage.match(/url\(\s*([^)]+?)\s*\)/);
+  return m ? m[1] : null;
 }
 
 function parseDirection(dir: string): number {

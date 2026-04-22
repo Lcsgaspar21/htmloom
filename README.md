@@ -29,7 +29,18 @@ HTMLoom is a self-contained Figma plugin. It loads HTML in its own sandboxed ifr
 - Mixed text runs — `<p>The <strong>bold</strong> word</p>` becomes a single
   Figma TEXT with per-range font weight, italic, color, size, and decoration
 
-Phase 4 (design-token bridge, radial gradients, image-url backgrounds) is tracked in `docs/ROADMAP.md`.
+**Phase 4 — Design token bridge.** CSS variables travel into Figma:
+
+- Every `--color-*` custom property on `:root` becomes a Figma Color Variable
+  in an `HTMLoom Tokens` collection (created on first import, reused after)
+- Solid fills, strokes, and per-run text colours auto-bind to a Variable
+  when the value matches a token — edit the token, the design follows
+- Radial gradients (`radial-gradient(...)`) and `background-image: url(...)`
+  on regular divs (not just `<img>`)
+- Nested inline runs: `<p>The <a><strong>bold link</strong></a> here</p>`
+  collapses into a single TEXT with three correctly-styled ranges
+
+Phase 5 (SVG-as-image rasterisation, value tokens, `<pre>`) is tracked in `docs/ROADMAP.md`.
 
 ### Authoring API (Phase 2)
 
@@ -65,12 +76,13 @@ In Figma desktop:
 
 ## Try it
 
-The repo ships three examples used during development:
+The repo ships four examples used during development:
 
 ```
 examples/alert-priority-wireframe.html   # Phase 1 — static layout
 examples/popover-states.html             # Phase 2 — interactive variants
 examples/styled-card.html                # Phase 3 — gradients, shadows, runs
+examples/tokens-radial.html              # Phase 4 — tokens, radial, bg-url, nested
 ```
 
 Drop either onto the plugin window to verify your local build.
