@@ -309,14 +309,27 @@ haven't; they side-stepped them by going absolute.
   Figma's intrinsic line-height when CSS leaves it `normal`. That
   behaviour matches modern browsers within a few percent.
 
-**Phase 7.2 — Local debugging of our AL chain** (~1-2 days, no
-external help):
-- Diagnose `.stack=150` regression (likely an interaction between block
-  stack promotion and `applyContainerOwnHug` for max-width parents)
-- Audit text wrapping in HUG/FILL chain (text node `textAutoResize`
-  ordering vs `layoutSizingHorizontal=FILL`)
-- Verify card child auto-layout chain end-to-end with a unit-test-style
-  fixture
+**Phase 7.2 — Local debugging of our AL chain** ✅ (landed 2026-04-22):
+- ✅ Root cause for `.stack=150` / cards-not-growing-in-height: CSS
+  `height: auto` resolves to a **used px value** via
+  `getComputedStyle().height` (the spec lets the browser collapse
+  computed→used here). Our `axisHasExplicitSize` was reading every
+  block's used px height as "explicit author intent" → `heightMode =
+  FIXED` for nearly every container. Frames couldn't HUG, so card
+  content overflowed and stack heights were locked. **Fix:**
+  `isHeightImplicit` rescue in `walker.ts` flips back to HUG when
+  there's no inline `height: ...` and no `max-height`. `min-height` is
+  intentionally NOT a bailout — captured via `sizing.minHeight` and
+  applied as a floor on a HUG frame, which matches CSS semantics.
+- ✅ Text-wrapping in HUG/FILL chain: `applyTextSizing` now respects
+  `widthMode`. HUG-text uses `textAutoResize=WIDTH_AND_HEIGHT` (so
+  pills/inline labels shrink to glyph width). FILL/FIXED text uses
+  `textAutoResize=HEIGHT` and locks the captured wrap column; the
+  later `setLayoutSizing(FILL)` re-wraps the text to the parent's
+  width and height re-syncs.
+- ✅ End-to-end fixture: `examples/sizing-chain.html` exercises 5
+  cases (content card, pinned hero, min-height, long-overflow card,
+  replaced element). Manual smoke-test via Figma import.
 
 **Phase 7.3 — Document the "screenshot mode" trade-off**:
 - Add an option to HTMLoom UI: `[ ] Capture as flat absolute layers

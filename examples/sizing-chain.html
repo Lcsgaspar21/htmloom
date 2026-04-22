@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>HTMLoom — sizing chain regression fixture</title>
+  <style>
+    :root {
+      --bg: #f4f6fb;
+      --surface: #fff;
+      --line: #dfe4ef;
+      --ink-900: #0d1320;
+      --ink-700: #3b465c;
+      --ink-500: #6b7891;
+      --brand: #6e56cf;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px;
+      font: 14px/1.5 system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink-900);
+    }
+    h1 { font-size: 18px; margin: 0 0 16px; }
+    h2 { font-size: 14px; color: var(--ink-500); margin: 24px 0 8px; font-weight: 500; }
+
+    /* Container patterns we want to round-trip correctly. */
+    .stack {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    /* CASE 1 — content-driven card. Author wrote `height: auto`, so the
+       captured CSS height is "used px" (e.g. 92px) but should map to HUG. */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* CASE 2 — pinned-height hero. Author DID set height explicitly →
+       must stay FIXED. The fix below should NOT regress this. */
+    .hero {
+      height: 160px;
+      background: linear-gradient(135deg, var(--brand), #c084fc);
+      color: #fff;
+      border-radius: 12px;
+      padding: 24px;
+      display: flex;
+      align-items: center;
+    }
+
+    /* CASE 3 — min-height pinned. Should stay FIXED-ish (min-height
+       counts as explicit author intent). */
+    .min-pin {
+      min-height: 80px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+    }
+
+    /* CASE 4 — long body that grows to many lines. Card MUST hug to the
+       text's flowed height; if heightMode mis-classifies as FIXED, the
+       overflow text overlaps the buttons below. */
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .pill {
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--brand);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .body-long { color: var(--ink-700); margin: 0; }
+
+    /* CASE 5 — image. Replaced element keeps its captured height (FIXED). */
+    .img-card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .img-card svg { width: 100%; height: auto; display: block; }
+  </style>
+</head>
+<body>
+  <h1>Sizing chain fixture (Phase 7.2)</h1>
+
+  <h2>Case 1 — content-driven card (heightMode should be HUG)</h2>
+  <div class="stack">
+    <article class="card">
+      <strong>Short card</strong>
+      <p class="body-long">One short line.</p>
+    </article>
+
+    <h2>Case 4 — long body forces card to grow</h2>
+    <article class="card">
+      <strong>Long card</strong>
+      <p class="body-long">
+        This body is intentionally long so that wrapping kicks in across
+        several lines. If the card is captured as FIXED-height, the text
+        below will visibly overflow the bottom edge and overlap the
+        action row, which is the regression we're fixing in Phase 7.2.
+        Two more sentences for good measure. And one more, just in case
+        the font metrics in Figma differ from the iframe's metrics by a
+        few pixels per line.
+      </p>
+      <div class="row">
+        <span class="pill">action</span>
+        <span class="pill">action</span>
+      </div>
+    </article>
+
+    <h2>Case 2 — pinned hero (must stay FIXED 160px)</h2>
+    <section class="hero">
+      <strong>Hero with explicit height: 160px</strong>
+    </section>
+
+    <h2>Case 3 — min-height pinned (counts as explicit intent)</h2>
+    <section class="min-pin">
+      Min-height 80px guarantees vertical breathing room.
+    </section>
+
+    <h2>Case 5 — replaced element keeps its size</h2>
+    <div class="img-card">
+      <svg viewBox="0 0 480 160" xmlns="http://www.w3.org/2000/svg">
+        <rect width="480" height="160" fill="#5b54d6" />
+        <text x="240" y="90" text-anchor="middle" fill="white" font-size="22" font-family="system-ui">Replaced element</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

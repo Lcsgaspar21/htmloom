@@ -647,13 +647,27 @@ function buildText(node: CapturedNode, ctx: BuildContext): TextNode {
 function applyTextSizing(text: TextNode, node: CapturedNode, t: TextStyle): void {
   const width = node.box.width;
   const hasNewlines = t.characters.includes("\n");
+
+  // When the captured sizing intent is HUG horizontally (inline labels,
+  // pill text, headings without wrap), HEIGHT-only mode would force a
+  // wrap at the captured pixel width even though we want the text to
+  // shrink to its glyph run. Switch to WIDTH_AND_HEIGHT so Figma uses
+  // the text's intrinsic width.
+  if (node.sizing.widthMode === "HUG") {
+    text.textAutoResize = "WIDTH_AND_HEIGHT";
+    return;
+  }
+
   if (t.preserveWhitespace || width <= 0 || hasNewlines) {
     text.textAutoResize = "WIDTH_AND_HEIGHT";
     return;
   }
+
+  // FILL / FIXED widths: lock the wrap column to what was captured. The
+  // parent loop later flips horizontal sizing to FILL via
+  // `applyChildSizing`; Figma re-wraps the text on that change while
+  // keeping `textAutoResize=HEIGHT` so the height tracks the new wrap.
   text.textAutoResize = "HEIGHT";
-  // With HEIGHT mode Figma overwrites the height to fit content; we still
-  // need to set the width so the wrap point matches what was captured.
   text.resize(Math.max(1, width), Math.max(1, node.box.height));
 }
 

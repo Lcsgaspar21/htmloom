@@ -1718,7 +1718,24 @@ function extractSizingIntent(
   const absoluteAnchors = isAbsolute ? extractAbsoluteAnchors(el, style) : null;
 
   const widthMode = overrideH ?? inferAxisMode(el, style, parent, parentStyle, "horizontal");
-  const heightMode = overrideV ?? inferAxisMode(el, style, parent, parentStyle, "vertical");
+  let heightMode = overrideV ?? inferAxisMode(el, style, parent, parentStyle, "vertical");
+
+  // Phase 7.2 safety net: a vertical FIXED on a content-driven container is
+  // almost always wrong. CSS `height: auto` resolves to a px used-value via
+  // `getComputedStyle`, which means our `axisHasExplicitSize` mis-reads
+  // every block as having an explicit height. Without this rescue, cards
+  // capture as FIXED-height frames and content visibly overflows them.
+  // Only flips to HUG when:
+  //   - the author did NOT set an inline `height: ...`
+  //   - and there's no `data-figma-sizing-v` override
+  //   - and the element is a content container (block / flex / grid / list)
+  if (
+    overrideV === null &&
+    heightMode === "FIXED" &&
+    isHeightImplicit(el, style)
+  ) {
+    heightMode = "HUG";
+  }
 
   return {
     widthMode,
@@ -1732,6 +1749,50 @@ function extractSizingIntent(
     alignSelfStretch,
     absoluteAnchors,
   };
+}
+
+/**
+ * True when the element's vertical size is content-driven (CSS `height:
+ * auto`) — i.e. the author did NOT pin it via inline style or via a
+ * min/max constraint. Drives the "rescue to HUG" fallback in
+ * `extractSizingIntent` because `getComputedStyle().height` always
+ * returns a used px value, masking author intent.
+ */
+function isHeightImplicit(el: HTMLElement, style: CSSStyleDeclaration): boolean {
+  // Inline `height: 120px` / `height: 50%` → explicit author intent.
+  const inlineH = el.style && el.style.height ? el.style.height.trim() : "";
+  if (inlineH && inlineH !== "auto") return false;
+
+  // `max-height` caps the size — combining it with HUG is invalid in
+  // Figma (HUG can't be larger than its content). Treat as explicit.
+  const maxH = style.maxHeight;
+  if (maxH && maxH !== "none") return false;
+
+  // NOTE: `min-height` is intentionally NOT a bailout. CSS `min-height`
+  // means "at least this tall, grow if content needs more" — which is
+  // exactly HUG + `minHeight` constraint applied via `applyMinMax`.
+
+  // Only rescue containers that *should* size to content. Replaced
+  // elements (img/svg/video) keep their captured height — HUG would
+  // distort their aspect ratio.
+  const tag = el.tagName;
+  if (
+    tag === "IMG" || tag === "SVG" || tag === "svg" ||
+    tag === "VIDEO" || tag === "CANVAS" || tag === "IFRAME"
+  ) return false;
+
+  const display = style.display;
+  return (
+    display === "block" ||
+    display === "flex" ||
+    display === "grid" ||
+    display === "inline-block" ||
+    display === "inline-flex" ||
+    display === "inline-grid" ||
+    display === "list-item" ||
+    display === "flow-root" ||
+    display === "table"
+  );
 }
 
 function parseSizingOverride(value: string | null): AxisSizing | null {
