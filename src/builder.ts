@@ -326,9 +326,34 @@ function buildText(node: CapturedNode, ctx: BuildContext): TextNode {
   text.fills = [bindSolid(t.color, ctx, explicitTextToken)];
   if (t.textDecoration !== "NONE") text.textDecoration = t.textDecoration;
   text.name = node.label || "text";
-  text.resize(Math.max(1, node.box.width), Math.max(1, node.box.height));
+  applyTextSizing(text, node, t);
   if (t.runs) applyTextRuns(text, t.runs, ctx, explicitTextToken);
   return text;
+}
+
+/**
+ * Resolves the text node's auto-resize mode and dimensions:
+ *
+ * - `preserveWhitespace` (pre / pre-wrap / pre-line) → WIDTH_AND_HEIGHT so
+ *   each `\n` becomes a Figma line break and runs of spaces aren't reflowed.
+ * - Synthesized text children (`box.width === 0`) inside a decorated leaf →
+ *   WIDTH_AND_HEIGHT so the parent auto-layout hugs the text.
+ * - Anything else with a known captured width → HEIGHT, locking the column
+ *   width so wrapping matches the source while letting the text grow taller
+ *   when Figma's font metrics differ from the iframe (avoids the "PNG
+ *   gets clipped on the second line" Phase 5 bug).
+ */
+function applyTextSizing(text: TextNode, node: CapturedNode, t: TextStyle): void {
+  const width = node.box.width;
+  const hasNewlines = t.characters.includes("\n");
+  if (t.preserveWhitespace || width <= 0 || hasNewlines) {
+    text.textAutoResize = "WIDTH_AND_HEIGHT";
+    return;
+  }
+  text.textAutoResize = "HEIGHT";
+  // With HEIGHT mode Figma overwrites the height to fit content; we still
+  // need to set the width so the wrap point matches what was captured.
+  text.resize(Math.max(1, width), Math.max(1, node.box.height));
 }
 
 function applyTextRuns(

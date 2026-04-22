@@ -175,15 +175,36 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
   the outer underline across the entire range; the inner strikethrough
   is dropped.
 
+### Phase 5 hotfixes (post-release patch)
+
+- [x] **Leaf text whitespace** — non-pre text nodes with raw HTML source
+      newlines / indentation now collapse to single spaces (matches the CSS
+      `white-space: normal` default). Without this, hand-formatted paragraphs
+      rendered with stray indentation in Figma.
+- [x] **Text clipping** — paragraphs and titles now use `textAutoResize:
+      HEIGHT` so the box grows when Figma's font metrics wrap a line earlier
+      than the source iframe. `<pre>` and synthesised badge text use
+      `WIDTH_AND_HEIGHT` so newlines render and parent auto-layout hugs.
+- [x] **SVG `currentColor`** — substituted with the captured element's
+      computed `color` before the SVG markup is serialised, so icon strokes
+      / fills don't fall back to black when the canvas rasteriser loads
+      the SVG out of context. Inline `style="..."` mentions are rewritten
+      too. Stylesheet-driven `currentColor` remains unsupported.
+
 ## Phase 6 — On the table
 
-- [ ] Resolve inline SVG `currentColor` via the parent's computed text colour
-      before serialising (so icon strokes inherit correctly).
+- [ ] **Responsive sizing** — opt-in `data-figma-fill="horizontal | vertical |
+      both"` attribute (or a heuristic on `width: 100%` / `flex: 1` children)
+      that emits `layoutSizingHorizontal: FILL_CONTAINER` so resizing the
+      imported root in Figma reflows children. Today every node has a fixed
+      captured size, which is why diminishing the root width does nothing.
 - [ ] Layout-field Variable bindings (padding, item spacing, corner radius)
       that consume the new Number tokens automatically.
 - [ ] Easing presets and configurable trigger delays for prototype reactions.
 - [ ] Multi-image `background` stacks (currently only the first layer wins).
 - [ ] Per-corner radius support for the auto-bind path.
+- [ ] SVG `currentColor` resolution from stylesheet selectors (currently only
+      attribute / inline-style references are rewritten).
 
 ## Phase 1 limits exposed by Phase 2 testing
 

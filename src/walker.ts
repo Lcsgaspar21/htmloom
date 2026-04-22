@@ -544,9 +544,15 @@ function extractTextSpec(
   if (el.children.length === 0) {
     if (!directText) return null;
     const ws = style.whiteSpace;
+    // For non-pre whitespace modes we MUST collapse — `directText` is the raw
+    // DOM text including HTML source-level newlines / indentation, which the
+    // browser would normally fold to single spaces. Without this, paragraphs
+    // hand-formatted across multiple lines render with stray indentation in
+    // Figma (Phase 5 hotfix bug).
     const characters = preservesWhitespace(ws)
       ? trimByPreMode(directText, ws)
-      : directText;
+      : collapseWhitespace(directText).trim();
+    if (!characters) return null;
     return buildTextStyle(characters, style, [
       makeRun(0, characters.length, style, parseDecoration(style)),
     ]);
@@ -580,6 +586,7 @@ function buildTextStyle(
     textAlign: mappedAlign,
     textDecoration: parseDecoration(s),
     runs: runs.length > 1 ? runs : null,
+    preserveWhitespace: preservesWhitespace(s.whiteSpace),
   };
 }
 
@@ -951,11 +958,50 @@ function splitTopLevelCommas(s: string): string[] {
 function resolveImageSrc(el: HTMLElement): string | null {
   if (el instanceof HTMLImageElement) return el.currentSrc || el.src || null;
   if (el.tagName.toLowerCase() === "svg") {
+    // Snapshot the rendered colour BEFORE serialising — once the SVG is loaded
+    // out-of-context via an `<img>` for canvas rasterisation, `currentColor`
+    // resolves to the user agent default (typically black) instead of the
+    // parent's `color`. Substituting in attributes keeps icon strokes / fills
+    // matching their on-page look.
+    const resolvedColor = window.getComputedStyle(el).color || "currentColor";
+    const cloned = el.cloneNode(true) as SVGElement;
+    substituteCurrentColor(cloned, resolvedColor);
     const serializer = new XMLSerializer();
-    const xml = serializer.serializeToString(el);
+    const xml = serializer.serializeToString(cloned);
     return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(xml)))}`;
   }
   return null;
+}
+
+/**
+ * Walks an SVG subtree and rewrites every `currentColor` reference (in the
+ * common paint attributes) to the supplied concrete colour. Doesn't touch
+ * inline `style="..."` declarations or stylesheet-driven colours — those
+ * remain a known limitation.
+ */
+function substituteCurrentColor(el: Element, color: string): void {
+  const PAINT_ATTRS = [
+    "fill",
+    "stroke",
+    "color",
+    "stop-color",
+    "flood-color",
+    "lighting-color",
+  ];
+  for (const attr of PAINT_ATTRS) {
+    const value = el.getAttribute(attr);
+    if (value && /^currentcolor$/i.test(value.trim())) {
+      el.setAttribute(attr, color);
+    }
+  }
+  // `style="fill: currentColor"` — handle the inline-style case too.
+  const inline = el.getAttribute("style");
+  if (inline && /currentcolor/i.test(inline)) {
+    el.setAttribute("style", inline.replace(/currentcolor/gi, color));
+  }
+  for (const child of Array.from(el.children)) {
+    substituteCurrentColor(child, color);
+  }
 }
 
 /**

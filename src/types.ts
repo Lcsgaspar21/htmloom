@@ -85,6 +85,12 @@ export interface TextStyle {
    * top-level font/colour fields act as a fallback for ranges that omit them.
    */
   runs: TextRun[] | null;
+  /**
+   * True when the source CSS declared `white-space: pre / pre-wrap / pre-line`.
+   * The builder uses this to disable wrapping (WIDTH_AND_HEIGHT auto-resize)
+   * so newlines render as Figma line breaks instead of being clipped.
+   */
+  preserveWhitespace: boolean;
 }
 
 export type NodeKind = "FRAME" | "TEXT" | "RECT" | "IMAGE";
