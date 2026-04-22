@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HTMLoom · token binding</title>
+    <style>
+      :root {
+        /* Colour tokens — auto-bind by RGBA, same as Phase 4. */
+        --surface: #ffffff;
+        --bg: #f4f6fb;
+        --ink-900: #0d1320;
+        --ink-700: #3b465c;
+        --ink-500: #6b7891;
+        --line: #dfe4ef;
+        --brand-500: #6e56cf;
+        --brand-600: #5d49b6;
+
+        /* NUMBER tokens — Phase 7 binds these to layout fields whenever
+           a captured padding / item-spacing / corner-radius equals one of
+           them. The variable type is FLOAT in the resulting Figma collection. */
+        --space-1: 4px;
+        --space-2: 8px;
+        --space-3: 12px;
+        --space-4: 16px;
+        --space-5: 20px;
+        --space-6: 24px;
+        --space-8: 32px;
+
+        --radius-sm: 6px;
+        --radius-md: 12px;
+        --radius-lg: 20px;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--ink-900);
+        padding: var(--space-8);
+      }
+      .stack {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-6);
+        max-width: 480px;
+        margin: 0 auto;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-md);
+        padding: var(--space-5);
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-3);
+      }
+      .card.featured {
+        border-radius: var(--radius-lg);
+        padding: var(--space-6);
+        gap: var(--space-4);
+      }
+      .card.compact {
+        border-radius: var(--radius-sm);
+        padding: var(--space-3);
+        gap: var(--space-2);
+      }
+      .title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--ink-900);
+        margin: 0;
+      }
+      .body {
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--ink-700);
+        margin: 0;
+      }
+      .row {
+        display: flex;
+        gap: var(--space-2);
+        align-items: center;
+      }
+      .pill {
+        padding: var(--space-1) var(--space-3);
+        border-radius: 999px;
+        background: var(--brand-500);
+        color: #fff;
+        font-size: 12px;
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stack">
+      <article class="card compact">
+        <h3 class="title">Compact card</h3>
+        <p class="body">
+          Padding 12 binds to <code>--space-3</code>, spacing 8 to
+          <code>--space-2</code>, radius 6 to <code>--radius-sm</code>.
+        </p>
+      </article>
+
+      <article class="card">
+        <h3 class="title">Default card</h3>
+        <p class="body">
+          Padding 20 binds to <code>--space-5</code>, spacing 12 to
+          <code>--space-3</code>, radius 12 to <code>--radius-md</code>.
+        </p>
+        <div class="row">
+          <span class="pill">tag</span>
+          <span class="pill">bound</span>
+        </div>
+      </article>
+
+      <article class="card featured">
+        <h3 class="title">Featured card</h3>
+        <p class="body">
+          Padding 24 binds to <code>--space-6</code>, spacing 16 to
+          <code>--space-4</code>, radius 20 to <code>--radius-lg</code>.
+        </p>
+      </article>
+    </div>
+  </body>
+</html>

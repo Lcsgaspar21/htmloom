@@ -28,6 +28,7 @@ import type {
   TextStyle,
   TokenBindings,
   TokenKind,
+  TriggerEasing,
   TriggerEvent,
   TriggerSpec,
   VariantSpec,
@@ -351,6 +352,14 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
       const captured = walk(child, el, `${path}.${i++}`);
       if (captured) node.children.push(captured);
     }
+
+    // Multi-track CSS Grid → nested rows of horizontal auto-layouts.
+    // Detected after children are captured so we can bucket them by their
+    // measured Y positions (avoids parsing `grid-row-start` / `grid-area`
+    // and works for implicit row placement).
+    if (style.display === "grid") {
+      restructureMultiTrackGrid(node, style);
+    }
   }
 
   return node;
@@ -491,6 +500,13 @@ const TRIGGER_ATTRS: Array<[string, TriggerEvent]> = [
 ];
 
 function parseTriggers(el: HTMLElement): TriggerSpec[] {
+  // Shared transition modifiers — declared once on the element and applied
+  // to every trigger it carries. Authors can split per-event modifiers via
+  // a small inline syntax (`expanded@300ms:ease-out`) when they need it.
+  const sharedDuration = parseMs(el.getAttribute("data-figma-trigger-duration"));
+  const sharedDelay = parseMs(el.getAttribute("data-figma-trigger-delay"));
+  const sharedEasing = parseEasing(el.getAttribute("data-figma-trigger-easing"));
+
   // Dedupe by event so `on-hover` + `on-mouse-enter` on the same element
   // don't produce two competing MOUSE_ENTER reactions. Last attribute wins.
   const byEvent = new Map<TriggerEvent, string>();
@@ -498,7 +514,93 @@ function parseTriggers(el: HTMLElement): TriggerSpec[] {
     const target = el.getAttribute(attr);
     if (target) byEvent.set(event, target);
   }
-  return Array.from(byEvent, ([event, targetVariant]) => ({ event, targetVariant }));
+  return Array.from(byEvent, ([event, raw]) => {
+    const parsed = parseTriggerTarget(raw);
+    return {
+      event,
+      targetVariant: parsed.target,
+      durationMs: parsed.duration ?? sharedDuration,
+      delayMs: parsed.delay ?? sharedDelay,
+      easing: parsed.easing ?? sharedEasing,
+    };
+  });
+}
+
+/**
+ * Parses the trigger attribute value, which can be either a bare variant
+ * name (`expanded`) or a richer per-trigger spec
+ * (`expanded@300ms:ease-out` / `expanded@200ms+150ms:gentle`).
+ *
+ * Format:
+ *   <variant>[@<duration>[+<delay>][:<easing>]]
+ *
+ * `duration` and `delay` accept `ms` or `s` suffixes; the easing token is
+ * matched case-insensitively against the same vocabulary as the shared
+ * `data-figma-trigger-easing` attribute.
+ */
+function parseTriggerTarget(raw: string): {
+  target: string;
+  duration: number | null;
+  delay: number | null;
+  easing: TriggerEasing | null;
+} {
+  const at = raw.indexOf("@");
+  if (at < 0) return { target: raw.trim(), duration: null, delay: null, easing: null };
+  const target = raw.slice(0, at).trim();
+  const rest = raw.slice(at + 1);
+  const colon = rest.indexOf(":");
+  const timing = colon < 0 ? rest : rest.slice(0, colon);
+  const easingStr = colon < 0 ? null : rest.slice(colon + 1);
+  let duration: number | null = null;
+  let delay: number | null = null;
+  const plus = timing.indexOf("+");
+  if (plus >= 0) {
+    duration = parseMs(timing.slice(0, plus));
+    delay = parseMs(timing.slice(plus + 1));
+  } else {
+    duration = parseMs(timing);
+  }
+  return { target, duration, delay, easing: easingStr ? parseEasing(easingStr) : null };
+}
+
+/**
+ * Reads a duration / delay value in `ms` or `s`. Bare numbers are treated
+ * as milliseconds for ergonomics (`data-figma-trigger-duration="200"`).
+ * Returns 0 for empty / invalid input so callers can use the result
+ * directly as a default.
+ */
+function parseMs(value: string | null): number {
+  if (!value) return 0;
+  const trimmed = value.trim();
+  if (!trimmed) return 0;
+  const m = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*(ms|s)?$/i);
+  if (!m) return 0;
+  const n = parseFloat(m[1]);
+  if (!isFinite(n) || n < 0) return 0;
+  return (m[2] || "").toLowerCase() === "s" ? n * 1000 : n;
+}
+
+function parseEasing(value: string | null): TriggerEasing {
+  if (!value) return "EASE_OUT";
+  const v = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  switch (v) {
+    case "linear":
+      return "LINEAR";
+    case "ease_in":
+    case "ease_in_quad":
+      return "EASE_IN";
+    case "ease_out":
+    case "ease":
+      return "EASE_OUT";
+    case "ease_in_out":
+    case "ease_in_and_out":
+      return "EASE_IN_AND_OUT";
+    case "gentle":
+    case "spring":
+      return "GENTLE";
+    default:
+      return "EASE_OUT";
+  }
 }
 
 /**
@@ -1174,6 +1276,161 @@ function mapAlign(v: string): AutoLayoutHint["cross"] {
     default:
       return "MIN";
   }
+}
+
+/* ---------- Multi-track CSS Grid restructure (Phase 7) ---------- */
+
+/**
+ * When the source is a multi-row, multi-column CSS grid, repackages the
+ * captured children into one synthesised "row" frame per visual row and
+ * flips the grid container to a VERTICAL auto-layout. Each row is then a
+ * HORIZONTAL auto-layout of the original cells.
+ *
+ * Why bucket by measured Y (vs parsing `grid-template-areas` /
+ * `grid-row-start`)? The browser already resolves implicit placement,
+ * `grid-auto-flow`, `order`, and any explicit overrides — measuring is the
+ * one source of truth that survives author quirks.
+ *
+ * Cells inherit FILL + `layoutGrow=1` when the row's cells share equal
+ * widths (the resolved fingerprint of `grid-template-columns: 1fr 1fr 1fr`).
+ * Otherwise we keep their captured sizing intent so non-uniform tracks
+ * (e.g. `200px 1fr 1fr`) survive intact.
+ */
+function restructureMultiTrackGrid(node: CapturedNode, style: CSSStyleDeclaration): void {
+  if (node.children.length < 2) return;
+  const rowGap = parsePx(style.rowGap) || parsePx(style.gap);
+  const colGap = parsePx(style.columnGap) || parsePx(style.gap);
+  const rows = bucketIntoRows(node.children);
+  if (rows.length < 2) return;
+
+  const trackWidths = (style.gridTemplateColumns || "")
+    .split(/\s+/)
+    .map(parsePx)
+    .filter((n) => n > 0);
+  const equalTracks =
+    trackWidths.length >= 2 &&
+    trackWidths.every((w) => Math.abs(w - trackWidths[0]) <= 1);
+
+  const synthesised: CapturedNode[] = rows.map((cells, rIdx) =>
+    synthesiseRowFrame(cells, node.id, rIdx, colGap, equalTracks),
+  );
+  node.children = synthesised;
+  node.layout = {
+    mode: "VERTICAL",
+    primary: "MIN",
+    cross: "MIN",
+    itemSpacing: rowGap,
+    confidence: 0.9,
+  };
+}
+
+/**
+ * Greedy single-pass row bucketing: sort children by Y, start a new row
+ * whenever the next child's top sits more than half the current row's
+ * minimum height below the row's top. Tolerance is bounded to [4, 24] px
+ * so very tall or very short cells don't break grouping.
+ *
+ * Each emitted row is sorted by X to preserve column order regardless of
+ * source DOM order (e.g. CSS `order` may have shuffled siblings).
+ */
+function bucketIntoRows(children: CapturedNode[]): CapturedNode[][] {
+  const sorted = [...children].sort((a, b) => a.box.y - b.box.y);
+  const rows: CapturedNode[][] = [];
+  let current: CapturedNode[] = [];
+  let rowTop = -Infinity;
+  let rowMinHeight = 0;
+  for (const child of sorted) {
+    if (current.length === 0) {
+      current.push(child);
+      rowTop = child.box.y;
+      rowMinHeight = child.box.height || 16;
+      continue;
+    }
+    const tol = Math.max(4, Math.min(24, rowMinHeight * 0.5));
+    if (child.box.y > rowTop + tol) {
+      rows.push(current);
+      current = [child];
+      rowTop = child.box.y;
+      rowMinHeight = child.box.height || 16;
+    } else {
+      current.push(child);
+      rowMinHeight = Math.min(rowMinHeight, child.box.height || rowMinHeight);
+    }
+  }
+  if (current.length > 0) rows.push(current);
+  for (const row of rows) row.sort((a, b) => a.box.x - b.box.x);
+  return rows;
+}
+
+function synthesiseRowFrame(
+  cells: CapturedNode[],
+  parentPath: string,
+  rowIndex: number,
+  itemSpacing: number,
+  equalTracks: boolean,
+): CapturedNode {
+  const minX = Math.min(...cells.map((c) => c.box.x));
+  const minY = Math.min(...cells.map((c) => c.box.y));
+  const maxX = Math.max(...cells.map((c) => c.box.x + c.box.width));
+  const maxY = Math.max(...cells.map((c) => c.box.y + c.box.height));
+
+  // Rebase cell positions to row-local coords so a future non-auto-layout
+  // fallback still places them correctly.
+  for (const cell of cells) {
+    cell.box.x -= minX;
+    cell.box.y -= minY;
+    if (equalTracks) {
+      // Equal grid tracks (`1fr 1fr 1fr`-style) → make every cell FILL the
+      // row equally so the layout reflows on resize.
+      cell.sizing = {
+        ...cell.sizing,
+        widthMode: "FILL",
+        flexGrow: cell.sizing.flexGrow > 0 ? cell.sizing.flexGrow : 1,
+      };
+    }
+  }
+
+  return {
+    id: `${parentPath}/row=${rowIndex}`,
+    kind: "FRAME",
+    tag: "_row",
+    label: `row ${rowIndex + 1}`,
+    box: { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
+    padding: { top: 0, right: 0, bottom: 0, left: 0 },
+    background: null,
+    border: { width: 0, color: null, radius: { tl: 0, tr: 0, br: 0, bl: 0 } },
+    opacity: 1,
+    layout: {
+      mode: "HORIZONTAL",
+      primary: "MIN",
+      cross: "MIN",
+      itemSpacing,
+      confidence: 0.9,
+    },
+    text: null,
+    imageSrc: null,
+    svgMarkup: null,
+    gradient: null,
+    backgroundImageUrl: null,
+    shadows: [],
+    children: cells,
+    component: null,
+    triggers: [],
+    tokenBindings: { background: null, text: null, border: null },
+    // Row stretches across the grid horizontally and hugs its tallest cell.
+    sizing: {
+      widthMode: "FILL",
+      heightMode: "HUG",
+      minWidth: null,
+      maxWidth: null,
+      minHeight: null,
+      maxHeight: null,
+      flexGrow: 0,
+      flexWrap: false,
+      alignSelfStretch: true,
+      absoluteAnchors: null,
+    },
+  };
 }
 
 /* ---------- Sizing intent (Phase 6) ---------- */

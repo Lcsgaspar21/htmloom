@@ -18,7 +18,6 @@ import type {
   SizingIntent,
   TextRun,
   TextStyle,
-  TriggerEvent,
   TriggerSpec,
 } from "./types";
 
@@ -27,6 +26,12 @@ interface TokenIndex {
   byColor: Map<string, Variable>;
   /** Variable name (e.g. `color/brand/500`) → Variable, used for explicit `data-figma-token-*` overrides. */
   byName: Map<string, Variable>;
+  /**
+   * Number value (px, rounded to 2 decimals) → FLOAT Variable. Powers the
+   * Phase 7 auto-binder for layout fields: padding, item spacing and
+   * corner radii bind to a token whenever their value matches.
+   */
+  byNumber: Map<string, Variable>;
 }
 
 const FALLBACK_FONT: FontName = { family: "Inter", style: "Regular" };
@@ -125,7 +130,7 @@ async function createNodeFor(
       scene = buildText(node, ctx);
       break;
     case "IMAGE":
-      scene = await buildImage(node);
+      scene = await buildImage(node, ctx);
       break;
     case "RECT":
       scene = await buildRect(node, ctx);
@@ -159,6 +164,18 @@ async function buildFrame(
     frame.paddingRight = node.padding.right;
     frame.paddingBottom = node.padding.bottom;
     frame.paddingLeft = node.padding.left;
+
+    // Auto-bind layout fields to Number Variables when their resolved px
+    // value matches a token. Per-side padding lets `--space-3` apply to
+    // `padding: 12px` with `padding-top: 24px` cleanly overriding to a
+    // different token on the top edge alone.
+    bindNumberField(frame, "paddingTop", node.padding.top, ctx);
+    bindNumberField(frame, "paddingRight", node.padding.right, ctx);
+    bindNumberField(frame, "paddingBottom", node.padding.bottom, ctx);
+    bindNumberField(frame, "paddingLeft", node.padding.left, ctx);
+    if (node.layout.itemSpacing > 0) {
+      bindNumberField(frame, "itemSpacing", node.layout.itemSpacing, ctx);
+    }
     // Default to FIXED — the child loop and applyContainerOwnSizing below
     // promote axes to HUG / FILL based on the captured sizing intent.
     frame.primaryAxisSizingMode = "FIXED";
@@ -471,7 +488,7 @@ async function applyReactions(
       );
       continue;
     }
-    reactions.push(buildReaction(trigger.event, dest.id));
+    reactions.push(buildReaction(trigger, dest.id));
   }
   if (reactions.length > 0) {
     await (sceneNode as SceneNode & {
@@ -480,15 +497,28 @@ async function applyReactions(
   }
 }
 
-function buildReaction(event: TriggerEvent, destinationId: string): Reaction {
+/**
+ * Maps a TriggerSpec to a Figma Reaction. When the spec carries a non-zero
+ * duration, we emit a SMART_ANIMATE transition (Figma interpolates between
+ * variants automatically — typically the right call for state changes
+ * captured from CSS-styled HTML). Otherwise the navigation is INSTANT.
+ */
+function buildReaction(trigger: TriggerSpec, destinationId: string): Reaction {
+  const transition: Transition | null = trigger.durationMs > 0
+    ? ({
+        type: "SMART_ANIMATE",
+        easing: { type: trigger.easing },
+        duration: trigger.durationMs / 1000,
+      } as unknown as Transition)
+    : null;
   return {
-    trigger: buildTrigger(event),
+    trigger: buildTrigger(trigger),
     actions: [
       {
         type: "NODE",
         destinationId,
         navigation: "CHANGE_TO",
-        transition: null,
+        transition,
         preserveScrollPosition: false,
       } as Action,
     ],
@@ -497,12 +527,14 @@ function buildReaction(event: TriggerEvent, destinationId: string): Reaction {
 
 /**
  * MOUSE_ENTER and MOUSE_LEAVE require a `delay` field per Figma's typings;
- * the other trigger types only need `type`. Without the delay, Figma either
- * throws or treats the reaction as malformed.
+ * the other trigger types only need `type`. Hover delay is captured per
+ * trigger (defaults to 0) so authors can match the dwell time used by
+ * their HTML / JS hover handlers.
  */
-function buildTrigger(event: TriggerEvent): Trigger {
+function buildTrigger(trigger: TriggerSpec): Trigger {
+  const event = trigger.event;
   if (event === "MOUSE_ENTER" || event === "MOUSE_LEAVE") {
-    return { type: event, delay: 0 } as Trigger;
+    return { type: event, delay: trigger.delayMs / 1000 } as Trigger;
   }
   return { type: event } as Trigger;
 }
@@ -587,7 +619,7 @@ function resolveFont(family: string, weight: number, italic: boolean): FontName 
   return FALLBACK_FONT;
 }
 
-async function buildImage(node: CapturedNode): Promise<SceneNode> {
+async function buildImage(node: CapturedNode, ctx: BuildContext): Promise<SceneNode> {
   // Inline SVGs become real Figma vector frames so they stay crisp at any
   // zoom and remain editable. We only fall back to the raster path for
   // <img> tags that point at PNG / JPEG / GIF resources.
@@ -599,7 +631,7 @@ async function buildImage(node: CapturedNode): Promise<SceneNode> {
   const rect = figma.createRectangle();
   rect.name = node.label || "image";
   rect.resize(Math.max(1, node.box.width), Math.max(1, node.box.height));
-  applyCornerRadius(rect, node);
+  applyCornerRadius(rect, node, ctx);
 
   if (node.imageSrc) {
     try {
@@ -709,7 +741,7 @@ async function applyVisuals(
     (node as FrameNode).effects = source.shadows.map(buildShadowEffect);
   }
 
-  applyCornerRadius(node, source);
+  applyCornerRadius(node, source, ctx);
   node.opacity = source.opacity;
 }
 
@@ -723,7 +755,7 @@ async function applyVisuals(
  * by name for explicit `data-figma-token-*` overrides only.
  */
 async function buildTokenIndex(tokens: DesignToken[]): Promise<TokenIndex> {
-  const empty: TokenIndex = { byColor: new Map(), byName: new Map() };
+  const empty: TokenIndex = { byColor: new Map(), byName: new Map(), byNumber: new Map() };
   const usable = tokens.filter((t) => t.kind !== "SKIP");
   if (usable.length === 0) return empty;
 
@@ -740,7 +772,7 @@ async function buildTokenIndex(tokens: DesignToken[]): Promise<TokenIndex> {
     }
   }
 
-  const out: TokenIndex = { byColor: new Map(), byName: new Map() };
+  const out: TokenIndex = { byColor: new Map(), byName: new Map(), byNumber: new Map() };
   for (const token of usable) {
     const variable = upsertVariable(token, collection, modeId, existing);
     if (!variable) continue;
@@ -751,8 +783,45 @@ async function buildTokenIndex(tokens: DesignToken[]): Promise<TokenIndex> {
       // tokens share the same value (e.g. semantic + primitive aliases).
       if (!out.byColor.has(key)) out.byColor.set(key, variable);
     }
+    if (token.kind === "NUMBER" && token.numericValue !== null) {
+      const key = numberKey(token.numericValue);
+      if (!out.byNumber.has(key)) out.byNumber.set(key, variable);
+    }
   }
   return out;
+}
+
+function numberKey(value: number): string {
+  // Two-decimal rounding folds rem→px conversions and sub-pixel artefacts
+  // into the same bucket so `padding: 16px` matches `--space-4: 1rem`.
+  return (Math.round(value * 100) / 100).toFixed(2);
+}
+
+/**
+ * Binds a numeric layout field (padding, item spacing, corner radius, ...)
+ * to a FLOAT Variable when the captured value matches a token. Falls back
+ * silently when no token matches or when the runtime rejects the binding
+ * (e.g. text nodes don't accept padding bindings).
+ */
+function bindNumberField(
+  node: SceneNode,
+  field: VariableBindableNodeField,
+  value: number,
+  ctx: BuildContext,
+): void {
+  const variable = ctx.tokens.byNumber.get(numberKey(value));
+  if (!variable) return;
+  if (!("setBoundVariable" in node)) return;
+  try {
+    (node as SceneNode & {
+      setBoundVariable: (f: VariableBindableNodeField, v: Variable | null) => void;
+    }).setBoundVariable(field, variable);
+  } catch (err) {
+    console.warn(
+      `[HTMLoom] bindNumberField(${field}, ${value}) failed for "${node.name}":`,
+      err,
+    );
+  }
 }
 
 function upsertVariable(
@@ -945,7 +1014,11 @@ function clamp01(n: number): number {
   return n < 0 ? 0 : n > 1 ? 1 : n;
 }
 
-function applyCornerRadius(node: FrameNode | RectangleNode, source: CapturedNode): void {
+function applyCornerRadius(
+  node: FrameNode | RectangleNode,
+  source: CapturedNode,
+  ctx: BuildContext | null = null,
+): void {
   const r = source.border.radius;
   if (r.tl === r.tr && r.tr === r.br && r.br === r.bl) {
     node.cornerRadius = r.tl;
@@ -954,6 +1027,14 @@ function applyCornerRadius(node: FrameNode | RectangleNode, source: CapturedNode
     (node as RectangleNode).topRightRadius = r.tr;
     (node as RectangleNode).bottomRightRadius = r.br;
     (node as RectangleNode).bottomLeftRadius = r.bl;
+  }
+  if (ctx) {
+    // Always bind per-corner so a uniform radius authored via `--radius-md`
+    // round-trips to four bound corners (Figma stores them individually).
+    if (r.tl > 0) bindNumberField(node, "topLeftRadius", r.tl, ctx);
+    if (r.tr > 0) bindNumberField(node, "topRightRadius", r.tr, ctx);
+    if (r.br > 0) bindNumberField(node, "bottomRightRadius", r.br, ctx);
+    if (r.bl > 0) bindNumberField(node, "bottomLeftRadius", r.bl, ctx);
   }
 }
 

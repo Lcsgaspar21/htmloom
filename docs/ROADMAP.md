@@ -245,17 +245,81 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
   auto-layout, but the constraint surface in Figma's runtime is
   occasionally finicky — verify after import.
 
-## Phase 7 — On the table
+## Phase 7 — Grid, token bindings, animated reactions ✓
 
-- [ ] Layout-field Variable bindings (padding, item spacing, corner radius)
-      that consume the new Number tokens automatically.
-- [ ] Easing presets and configurable trigger delays for prototype reactions.
-- [ ] Multi-image `background` stacks (currently only the first layer wins).
-- [ ] Per-corner radius support for the auto-bind path.
-- [ ] SVG `currentColor` resolution from stylesheet selectors (currently only
-      attribute / inline-style references are rewritten).
-- [ ] Multi-track CSS Grid → nested auto-layouts (rows of columns).
+- [x] **Multi-track CSS Grid → nested auto-layouts**. Containers with
+      `display: grid` and 2+ visual rows are restructured into a vertical
+      stack of synthesised "row" frames, each a horizontal auto-layout of
+      the original cells. Children are bucketed by measured Y position
+      (greedy single-pass with a tolerance bounded to `[4, 24]px`), so
+      `grid-auto-flow`, `order`, and implicit placement all survive.
+      Equal-width tracks (the resolved fingerprint of `1fr 1fr 1fr`)
+      promote every cell to `FILL` with `layoutGrow=1`, so a 3-column
+      dashboard reflows when the outer frame is resized.
+- [x] **Layout-field Variable bindings**. NUMBER tokens now bind to
+      Figma layout fields, not just sit in the collection. `byNumber`
+      lookup table (keyed by 2-decimal-rounded px, so rem→px folds into
+      the same bucket) drives auto-binding of `paddingTop`/`-Right`/
+      `-Bottom`/`-Left`, `itemSpacing`, and the four corner radii. Edit
+      the Variable, every padding / spacing / radius follows.
+- [x] **Per-corner radius auto-bind**. Always emitted as four bindings,
+      even when the source CSS uses the shorthand. A uniform
+      `border-radius: 12px` round-trips to four bound corners, all
+      pointing at the same Variable.
+- [x] **Easing + delays for prototype reactions**. Triggers carry
+      `durationMs`, `delayMs`, and an `easing` curve. When `durationMs >
+      0` the builder emits a `SMART_ANIMATE` transition (the right
+      default for state changes captured from CSS-styled HTML);
+      otherwise the navigation stays INSTANT. Authored via
+      `data-figma-trigger-{duration,delay,easing}` for shared values, or
+      per-trigger via the inline syntax
+      `<variant>@<duration>[+<delay>]:<easing>`. Easing keywords:
+      `linear`, `ease-in`, `ease-out`, `ease-in-out`, `gentle`.
+- [x] `examples/grid-dashboard.html` covering 3×2 multi-track grid with
+      `1fr 1fr 1fr` columns and a highlighted alt-tone cell.
+- [x] `examples/tokens-binding.html` covering padding / item spacing /
+      corner radius bindings across compact / default / featured cards
+      using `--space-*` and `--radius-*` token families.
+- [x] `examples/transitions.html` covering an animated popover variant
+      pair with both shared modifiers (collapsed → expanded, 280 ms
+      ease-out) and the inline override (expanded → collapsed,
+      `@200ms:ease-in`).
+
+### Known limits to revisit
+
+- **Grid bucketing assumes rows are visually disjoint**. Spanning rows
+  (`grid-row: span 2`) collapses into the row whose Y matches the
+  topmost cell, which may distort the row layout. Workaround: split the
+  spanning cell out of the grid for now.
+- **Equal-track inference uses resolved px widths**. An author who
+  constrains `grid-template-columns: 200px 1fr 1fr` keeps the first
+  column FIXED (correct) but the second / third stay equal so they
+  also become FILL — useful 90% of the time, occasionally not what the
+  author wanted. Override per cell with `data-figma-sizing-h`.
+- **Number token binding can't backfill missing tokens**. If the source
+  CSS uses a literal `padding: 17px` and no token resolves to 17, the
+  field stays unbound (literal value, no Variable). Add a token first.
+- **Variable binding is best-effort per node**. Some Figma versions
+  reject `setBoundVariable` on certain nodes (e.g. text nodes never
+  expose padding). Failures are logged to the plugin console and the
+  literal value remains.
+- **SMART_ANIMATE between variants requires matching layer names** to
+  interpolate properties — that's Figma's rule, not ours. The builder
+  uses the source `class` / `data-figma-component` for naming, which
+  usually works because both variants come from the same authored
+  template.
+
+## Phase 8 — On the table
+
+- [ ] Multi-image `background` stacks (currently only the first layer
+      wins, both for stacked gradients and for gradient + URL combos).
+- [ ] SVG `currentColor` resolution from stylesheet selectors (currently
+      only attribute / inline-style references are rewritten).
 - [ ] CSS `aspect-ratio` → Figma's `targetAspectRatio`.
+- [ ] `align-content`, `justify-self`, `place-items` longhands.
+- [ ] Grid spanning cells (`grid-row: span N`, `grid-column: span N`).
+- [ ] Custom Bezier easing — Figma's `CUSTOM_BEZIER` accepts a control
+      polygon; map a CSS `cubic-bezier(...)` directly.
 
 ## Phase 1 limits exposed by Phase 2 testing
 

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>HTMLoom · animated transitions</title>
+    <style>
+      :root {
+        --fg: #1f2024;
+        --muted: #6b7280;
+        --line: #e5e7eb;
+        --bg: #f6f7f9;
+        --accent: #6e56cf;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 48px;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      h1 { font-size: 16px; font-weight: 600; margin: 0 0 24px; }
+      p.note {
+        max-width: 480px;
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.5;
+        margin: 0 0 32px;
+      }
+
+      [data-figma-component] {
+        display: flex;
+        flex-direction: row;
+        gap: 32px;
+        align-items: flex-start;
+      }
+      [data-figma-variant] {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 20px;
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        width: 260px;
+      }
+
+      .toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        border-radius: 8px;
+        background: var(--accent);
+        color: white;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        align-self: flex-start;
+      }
+
+      .panel {
+        padding: 12px 14px;
+        background: #1f2024;
+        color: white;
+        border-radius: 10px;
+        font-size: 12px;
+        line-height: 1.5;
+        max-width: 220px;
+      }
+      .panel strong { color: #facc15; }
+      .label { font-size: 11px; color: var(--muted); }
+
+      /* Hidden in the "collapsed" variant — capture forces it visible. */
+      [data-variant="collapsed"] .panel { display: none; }
+    </style>
+  </head>
+  <body>
+    <h1>Animated popover (Smart Animate, 280 ms ease-out)</h1>
+    <p class="note">
+      The trigger uses <code>data-figma-trigger-duration="280ms"</code> +
+      <code>data-figma-trigger-easing="ease-out"</code>. In Figma the
+      collapsed → expanded reaction interpolates the panel's appearance.
+    </p>
+
+    <section
+      data-figma-component="AnimatedPopover"
+    >
+      <div data-figma-variant="collapsed" data-variant="collapsed">
+        <span class="label">Variant: collapsed</span>
+        <button
+          class="toggle"
+          data-figma-on-click="expanded"
+          data-figma-trigger-duration="280ms"
+          data-figma-trigger-easing="ease-out"
+        >
+          Show details
+        </button>
+      </div>
+
+      <div data-figma-variant="expanded" data-variant="expanded">
+        <span class="label">Variant: expanded</span>
+        <button
+          class="toggle"
+          data-figma-on-click="collapsed@200ms:ease-in"
+        >
+          Hide details
+        </button>
+        <aside class="panel">
+          <strong>Tip</strong> — per-trigger overrides use the inline
+          <code>variant@duration:easing</code> syntax (see the "Hide" button).
+        </aside>
+      </div>
+    </section>
+  </body>
+</html>

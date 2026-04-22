@@ -74,7 +74,28 @@ HTMLoom is a self-contained Figma plugin. It loads HTML in its own sandboxed ifr
 - Override per element with `data-figma-sizing-h="fill|hug|fixed"` and
   `data-figma-sizing-v="…"` when the heuristic guesses wrong.
 
-Phase 7 (multi-track grid, layout-field Variable bindings, easing presets) is tracked in `docs/ROADMAP.md`.
+**Phase 7 — Grid, token bindings on layout fields, animated reactions.**
+
+- **Multi-track CSS Grid → nested auto-layouts.** Containers with
+  `display: grid` and 2+ visual rows are restructured into a vertical
+  stack of horizontal rows. Cells are bucketed by measured Y position
+  (so `grid-auto-flow`, `order`, and implicit placement all survive).
+  Equal-width tracks (`1fr 1fr 1fr`-style) make every cell `FILL` with
+  `layoutGrow=1`, so a 3-column dashboard reflows when you resize the
+  outer frame.
+- **Layout-field Variable bindings.** `--space-*`, `--radius-*` and any
+  numeric token are now bound, not just imported. Padding (per side),
+  item spacing, and corner radius (per corner) auto-bind to the matching
+  FLOAT Variable when the resolved px value matches a token. Edit the
+  Variable, every padding / radius / gap follows.
+- **Easing + delays for prototype reactions.** Triggers can now animate.
+  Add `data-figma-trigger-duration="280ms"` and
+  `data-figma-trigger-easing="ease-out"` to emit a `SMART_ANIMATE`
+  transition; `data-figma-trigger-delay="120ms"` extends the dwell time
+  on hover triggers. Per-trigger overrides via the inline syntax
+  `<variant>@<duration>[+<delay>]:<easing>`.
+
+Phase 8 (multi-image background stacks, SVG `currentColor` from stylesheets, CSS `aspect-ratio`) is tracked in `docs/ROADMAP.md`.
 
 ### Authoring API
 
@@ -121,6 +142,30 @@ Useful when several tokens share a value (so the auto-binder can't pick determin
 
 The override wins the heuristic. Useful for CMS-driven content whose rendered width happens to coincide with the parent content box (and would otherwise be classified as `FILL`).
 
+**Animated reactions (Phase 7):**
+
+```html
+<!-- Click triggers animate when duration > 0 (Smart Animate). -->
+<button
+  data-figma-on-click="expanded"
+  data-figma-trigger-duration="280ms"
+  data-figma-trigger-easing="ease-out"
+>Open</button>
+
+<!-- Per-trigger overrides via inline syntax: variant@duration[+delay]:easing -->
+<button data-figma-on-click="collapsed@200ms:ease-in">Close</button>
+
+<!-- Hover-and-stay reveal — 150 ms dwell, 240 ms gentle interpolation -->
+<span
+  data-figma-on-mouse-enter="hovered"
+  data-figma-trigger-delay="150ms"
+  data-figma-trigger-duration="240ms"
+  data-figma-trigger-easing="gentle"
+>Hover me</span>
+```
+
+Easing keywords: `linear`, `ease-in`, `ease-out`, `ease-in-out`, `gentle`. Bare numbers in the duration / delay attributes are treated as milliseconds (`280` ≡ `280ms`).
+
 ## Develop
 
 ```bash
@@ -137,7 +182,7 @@ In Figma desktop:
 
 ## Try it
 
-The repo ships seven examples used during development:
+The repo ships ten examples used during development:
 
 ```
 examples/alert-priority-wireframe.html   # Phase 1 — static layout
@@ -147,9 +192,17 @@ examples/tokens-radial.html              # Phase 4 — tokens, radial, bg-url, n
 examples/phase5-fidelity.html            # Phase 5 — SVG, <pre>, gradient, overrides
 examples/responsive-card.html            # Phase 6 — HUG/FILL/FIXED, wrap, full-width
 examples/responsive-grid.html            # Phase 6 — flex-wrap tile grid that reflows
+examples/grid-dashboard.html             # Phase 7 — 3×2 multi-track grid
+examples/tokens-binding.html             # Phase 7 — padding/spacing/radius bound
+examples/transitions.html                # Phase 7 — Smart Animate variant transitions
 ```
 
-Drop any of them onto the plugin window to verify your local build. For Phase 6, after import, drag the resulting frame's right edge in Figma — `responsive-grid.html` should reflow tiles from 4-up to 1-up just like the browser does.
+Drop any of them onto the plugin window to verify your local build. Quick checks:
+
+- **Phase 6** — drag the imported frame's right edge; `responsive-grid.html` should reflow tiles 4-up → 1-up.
+- **Phase 7 grid** — `grid-dashboard.html` produces an outer `VERTICAL` auto-layout with two synthesised rows, each a `HORIZONTAL` auto-layout of three cells with `FILL` + `layoutGrow=1`.
+- **Phase 7 tokens** — `tokens-binding.html` shows numeric Variables under the `HTMLoom Tokens` collection bound on padding / item-spacing / corner radii of every imported card.
+- **Phase 7 reactions** — drop an Instance of `AnimatedPopover` from `transitions.html` into a prototype frame and click "Show details"; the panel should fade/move-in over 280 ms.
 
 ## Architecture (one paragraph)
 

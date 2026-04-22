@@ -130,10 +130,35 @@ export type TriggerEvent =
   | "MOUSE_ENTER"
   | "MOUSE_LEAVE";
 
+/**
+ * Animation easing for prototype reactions. Mirrors a subset of Figma's
+ * easing types so authors can pick a curve via `data-figma-trigger-easing`
+ * without remembering the all-caps API names.
+ */
+export type TriggerEasing =
+  | "LINEAR"
+  | "EASE_IN"
+  | "EASE_OUT"
+  | "EASE_IN_AND_OUT"
+  | "GENTLE";
+
 export interface TriggerSpec {
   event: TriggerEvent;
   /** Variant name (within the enclosing component) to switch to. */
   targetVariant: string;
+  /**
+   * Hover-trigger delay in milliseconds. Only used for MOUSE_ENTER /
+   * MOUSE_LEAVE; click triggers ignore it. Defaults to 0.
+   */
+  delayMs: number;
+  /**
+   * Transition duration in milliseconds. When > 0 the builder emits a
+   * SMART_ANIMATE transition between variants instead of an instant
+   * variant switch. Defaults to 0 (instant).
+   */
+  durationMs: number;
+  /** Easing curve for the transition. Ignored when `durationMs === 0`. */
+  easing: TriggerEasing;
 }
 
 export interface VariantSpec {
