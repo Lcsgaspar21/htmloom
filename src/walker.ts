@@ -11,6 +11,8 @@ import type {
   AbsoluteAnchors,
   AutoLayoutHint,
   AxisSizing,
+  BorderSide,
+  BorderStyle,
   BoxModel,
   CaptureResult,
   CapturedNode,
@@ -56,6 +58,12 @@ export async function captureDocument(
     width: doc.documentElement.clientWidth,
     height: doc.documentElement.clientHeight,
   };
+
+  // Preprocessing: inline any `<use href="#sprite-id"/>` references so the
+  // referenced `<symbol>` content travels with the SVG. Without this,
+  // sprite-sheet icons serialize as a hollow `<use>` tag and Figma renders
+  // an empty box. Borrowed pattern from @builder.io/html-to-figma.
+  inlineSvgUseElements(root);
 
   const tree = walk(root, root, "0");
   if (!tree) throw new Error("HTMLoom: root element produced no captured node");
@@ -143,9 +151,22 @@ function classifyTokenValue(value: string): {
 /* ---------- SVG rasterisation post-pass ---------- */
 
 async function rasterizeSvgs(node: CapturedNode): Promise<void> {
-  if (node.imageSrc && isSvgSource(node.imageSrc)) {
-    const png = await tryRasterizeSvg(node.imageSrc, node.box.width, node.box.height);
-    if (png) node.imageSrc = png;
+  // Phase 7.1: prefer SVG-as-vector pass-through. When an `<img>` or
+  // `background-image` points at SVG content, try to recover the markup
+  // (decode data URI, or fetch the .svg file) and stash it on
+  // `svgMarkup` so `buildSvgVector` produces an editable Figma frame.
+  // Only rasterize when that recovery fails.
+  if (node.imageSrc && isSvgSource(node.imageSrc) && !node.svgMarkup) {
+    const markup = await tryRecoverSvgMarkup(node.imageSrc);
+    if (markup) {
+      node.svgMarkup = markup;
+      // Promote to IMAGE kind so buildImage routes through the vector path.
+      // (Already IMAGE for `<img>` tags; harmless reassignment.)
+      node.kind = "IMAGE";
+    } else {
+      const png = await tryRasterizeSvg(node.imageSrc, node.box.width, node.box.height);
+      if (png) node.imageSrc = png;
+    }
   }
   if (node.backgroundImageUrl && isSvgSource(node.backgroundImageUrl)) {
     const png = await tryRasterizeSvg(
@@ -159,6 +180,32 @@ async function rasterizeSvgs(node: CapturedNode): Promise<void> {
     for (const variant of node.component.variants) await rasterizeSvgs(variant.tree);
   }
   for (const child of node.children) await rasterizeSvgs(child);
+}
+
+/**
+ * Attempts to recover the SVG markup behind an image-style source.
+ * Returns null when the resource is unreachable or returns non-SVG bytes.
+ */
+async function tryRecoverSvgMarkup(src: string): Promise<string | null> {
+  try {
+    if (src.startsWith("data:image/svg")) {
+      // `data:image/svg+xml;base64,...` or `data:image/svg+xml,...`
+      const commaAt = src.indexOf(",");
+      if (commaAt < 0) return null;
+      const meta = src.slice(0, commaAt);
+      const payload = src.slice(commaAt + 1);
+      const decoded = /;base64/i.test(meta) ? atob(payload) : decodeURIComponent(payload);
+      return decoded.includes("<svg") ? decoded : null;
+    }
+    // Best-effort fetch for `.svg` URLs. Same-origin documents will work;
+    // cross-origin without CORS will reject — caught and rasterized below.
+    const res = await fetch(src, { credentials: "omit" });
+    if (!res.ok) return null;
+    const text = await res.text();
+    return text.includes("<svg") ? text : null;
+  } catch {
+    return null;
+  }
 }
 
 function isSvgSource(src: string): boolean {
@@ -279,13 +326,13 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
   // pick gradient as the dominant fill to keep paint stacks short.
   const backgroundImageUrl = gradient ? null : parseBackgroundImageUrl(style.backgroundImage);
   const shadows = parseShadows(style.boxShadow);
-  const borderWidth = parsePx(style.borderTopWidth);
+  const borderInfo = parseBorder(style);
   const hasDecoration =
     background !== null ||
     gradient !== null ||
     backgroundImageUrl !== null ||
     shadows.length > 0 ||
-    borderWidth > 0 ||
+    borderInfo.width > 0 ||
     padding.top + padding.right + padding.bottom + padding.left > 0;
 
   // Decide whether this element produces text content. For elements that
@@ -315,14 +362,15 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     padding,
     background,
     border: {
-      width: borderWidth,
-      color: parseColor(style.borderTopColor),
+      width: borderInfo.width,
+      color: borderInfo.color,
       radius: {
         tl: parsePx(style.borderTopLeftRadius),
         tr: parsePx(style.borderTopRightRadius),
         br: parsePx(style.borderBottomRightRadius),
         bl: parsePx(style.borderBottomLeftRadius),
       },
+      sides: borderInfo.sides,
     },
     opacity: parseFloat(style.opacity || "1"),
     layout,
@@ -393,7 +441,7 @@ function synthesizeTextChild(
     box: { x: 0, y: 0, width: 0, height: 0 },
     padding: { top: 0, right: 0, bottom: 0, left: 0 },
     background: null,
-    border: { width: 0, color: null, radius: { tl: 0, tr: 0, br: 0, bl: 0 } },
+    border: { width: 0, color: null, radius: { tl: 0, tr: 0, br: 0, bl: 0 }, sides: null },
     opacity: 1,
     layout: { mode: "NONE", primary: "MIN", cross: "MIN", itemSpacing: 0, confidence: 0 },
     text,
@@ -672,6 +720,82 @@ function parsePadding(s: CSSStyleDeclaration): Padding {
     bottom: parsePx(s.paddingBottom),
     left: parsePx(s.paddingLeft),
   };
+}
+
+/**
+ * Reads all four border sides and returns either a uniform descriptor
+ * (`sides: null`, builder uses Figma `strokes`) or a per-side descriptor
+ * (`sides: {...}`, builder paints 4 absolutely-positioned rectangles).
+ *
+ * `border-style: none` and `border-style: hidden` zero out the side. CSS
+ * resets often emit `border-bottom-width: 1px` even when the style is
+ * none; ignoring that here keeps the import clean.
+ */
+function parseBorder(s: CSSStyleDeclaration): {
+  width: number;
+  color: RGBA | null;
+  sides: BorderStyle["sides"];
+} {
+  const sideOf = (
+    widthProp: string,
+    colorProp: string,
+    styleProp: string,
+  ): BorderSide => {
+    const styleVal = s.getPropertyValue(styleProp);
+    if (styleVal === "none" || styleVal === "hidden") {
+      return { width: 0, color: null };
+    }
+    return {
+      width: parsePx(s.getPropertyValue(widthProp)),
+      color: parseColor(s.getPropertyValue(colorProp)),
+    };
+  };
+  const top = sideOf("border-top-width", "border-top-color", "border-top-style");
+  const right = sideOf("border-right-width", "border-right-color", "border-right-style");
+  const bottom = sideOf("border-bottom-width", "border-bottom-color", "border-bottom-style");
+  const left = sideOf("border-left-width", "border-left-color", "border-left-style");
+
+  const widths = [top.width, right.width, bottom.width, left.width];
+  const maxWidth = Math.max(...widths);
+  if (maxWidth === 0) {
+    return { width: 0, color: null, sides: null };
+  }
+
+  // Find a representative side (the first one with non-zero width) to use
+  // as the dominant colour/width when callers want a single value.
+  const dominant =
+    [top, right, bottom, left].find((s) => s.width > 0) ?? top;
+
+  // Uniform when all four sides share width AND colour. Use a tight
+  // colour-equality check so a `border: 1px solid red` doesn't degrade
+  // into the per-side path because of a stray `border-bottom-color`.
+  const allSameWidth = widths.every((w) => Math.abs(w - dominant.width) < 0.01);
+  const allSameColor =
+    rgbaEquals(top.color, dominant.color) &&
+    rgbaEquals(right.color, dominant.color) &&
+    rgbaEquals(bottom.color, dominant.color) &&
+    rgbaEquals(left.color, dominant.color);
+
+  if (allSameWidth && allSameColor) {
+    return { width: dominant.width, color: dominant.color, sides: null };
+  }
+
+  return {
+    width: dominant.width,
+    color: dominant.color,
+    sides: { top, right, bottom, left },
+  };
+}
+
+function rgbaEquals(a: RGBA | null, b: RGBA | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    Math.abs(a.r - b.r) < 0.001 &&
+    Math.abs(a.g - b.g) < 0.001 &&
+    Math.abs(a.b - b.b) < 0.001 &&
+    Math.abs(a.a - b.a) < 0.001
+  );
 }
 
 function parseColor(input: string | null | undefined): RGBA | null {
@@ -1158,6 +1282,44 @@ function resolveImageSrc(el: HTMLElement): string | null {
  *  3. Backfills `width`/`height` from `viewBox` when authors rely on CSS
  *     sizing, so the imported vector frame has a sensible intrinsic size.
  */
+/**
+ * Replaces every `<use href="#sprite-id"/>` reference in the captured tree
+ * with the inlined contents of the referenced symbol/group. Sprite-sheet
+ * patterns rely on the user-agent to resolve `<use>` lazily; once we
+ * serialize the SVG out of its document context (to send to Figma), the
+ * resolution would otherwise be lost. Mutates `root` in place — runs once
+ * up-front, before the main walk.
+ *
+ * Borrowed from @builder.io/html-to-figma's `processSvgUseElements`.
+ */
+function inlineSvgUseElements(root: HTMLElement): void {
+  const ownerDoc = root.ownerDocument || document;
+  const uses = root.querySelectorAll("use");
+  for (const use of Array.from(uses)) {
+    try {
+      // `href` and `xlink:href` are both legal; `href.baseVal` is the SVG
+      // animated string interface, `getAttribute` is the fallback for
+      // non-namespaced cases.
+      const ref =
+        (use as SVGUseElement).href?.baseVal ||
+        use.getAttribute("href") ||
+        use.getAttribute("xlink:href") ||
+        "";
+      if (!ref || !ref.startsWith("#")) continue;
+      const symbol = ownerDoc.querySelector(ref);
+      if (!symbol) continue;
+      // Replace `<use>` with the symbol's inner contents. We don't try to
+      // re-apply transforms set on the `<use>` element — sprite use-cases
+      // typically pre-position via `viewBox` already, and the visual loss
+      // when a transform was set is preferable to losing the icon entirely.
+      use.outerHTML = symbol.innerHTML;
+    } catch (err) {
+      // Malformed href / cross-document refs: log and continue.
+      console.warn("[HTMLoom] failed to inline <use>", err);
+    }
+  }
+}
+
 function serializeInlineSvg(el: HTMLElement): string | null {
   if (el.tagName.toLowerCase() !== "svg") return null;
   const resolvedColor = window.getComputedStyle(el).color || "currentColor";
@@ -1407,7 +1569,7 @@ function synthesiseRowFrame(
     box: { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
     padding: { top: 0, right: 0, bottom: 0, left: 0 },
     background: null,
-    border: { width: 0, color: null, radius: { tl: 0, tr: 0, br: 0, bl: 0 } },
+    border: { width: 0, color: null, radius: { tl: 0, tr: 0, br: 0, bl: 0 }, sides: null },
     opacity: 1,
     layout: {
       mode: "HORIZONTAL",

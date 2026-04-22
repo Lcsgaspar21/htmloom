@@ -288,11 +288,26 @@ haven't; they side-stepped them by going absolute.
 
 ### What we should actually do
 
-**Phase 7.1 — Tangential ports from Builder.io** (~1 day, high ROI):
-- Per-side border rectangles
-- SVG `<use>` inlining
-- SVG outerHTML pass-through as primary path
-- Inline-element bbox aggregation
+**Phase 7.1 — Tangential ports from Builder.io** ✅ (landed 2026-04-22):
+- ✅ Per-side border rectangles → `appendPerSideBorders` in `builder.ts`,
+  `parseBorder` in `walker.ts`, type extension in `BorderStyle.sides`.
+  Uniform borders still go through Figma's stroke; mixed borders (e.g.
+  `border-bottom: 1px solid`) are emitted as 4 absolutely-positioned
+  rectangles with edge constraints.
+- ✅ SVG `<use>` inlining → `inlineSvgUseElements` runs once before walk,
+  rewrites `<use href="#sym">` with the referenced symbol's `innerHTML`
+  so sprite-sheet icons survive serialisation.
+- ✅ SVG outerHTML pass-through as primary path → `tryRecoverSvgMarkup`
+  decodes `data:image/svg+xml` URIs and (best-effort) fetches `.svg`
+  URLs into `node.svgMarkup`, so they go through `createNodeFromSvgAsync`
+  as crisp vectors instead of being rasterised.
+- ⏸ Inline-element bbox aggregation — skipped: low ROI for our typical
+  examples (mostly short inline labels in flex containers; the
+  multi-line wrap edge case isn't currently breaking imports).
+- ⏸ Line-height correction — skipped: our walker already passes through
+  the captured px value when CSS resolves it, and falls back to
+  Figma's intrinsic line-height when CSS leaves it `normal`. That
+  behaviour matches modern browsers within a few percent.
 
 **Phase 7.2 — Local debugging of our AL chain** (~1-2 days, no
 external help):

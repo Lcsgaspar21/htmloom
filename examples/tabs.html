@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HTMLoom · tabs</title>
+    <style>
+      :root {
+        --surface: #ffffff;
+        --bg: #f4f6fb;
+        --ink-900: #0d1320;
+        --ink-700: #3b465c;
+        --ink-500: #6b7891;
+        --line: #dfe4ef;
+        --brand-500: #6e56cf;
+        --brand-600: #5d49b6;
+        --brand-50: #ece8fb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--ink-900);
+        padding: 32px;
+      }
+      .tabs {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 24px;
+        max-width: 480px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .tablist {
+        display: flex;
+        gap: 4px;
+        padding: 4px;
+        background: var(--bg);
+        border-radius: 12px;
+      }
+      .tab {
+        flex: 1;
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--ink-700);
+        background: transparent;
+        border: 0;
+        cursor: pointer;
+        text-align: center;
+      }
+      .tab[aria-selected="true"] {
+        background: var(--surface);
+        color: var(--brand-600);
+        box-shadow: 0 1px 2px rgba(13, 19, 32, 0.06);
+      }
+      .panel {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .panel h3 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+      }
+      .panel p {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--ink-700);
+      }
+
+      /* Each variant only shows its own panel — Figma captures the visible
+         state per variant, exactly the same way a user sees it. */
+      [data-figma-variant="overview"] .panel:not(.overview),
+      [data-figma-variant="usage"] .panel:not(.usage),
+      [data-figma-variant="security"] .panel:not(.security) {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      The whole widget is one COMPONENT_SET. Each <section> is a VARIANT.
+      Inside each variant the same DOM is repeated with its own
+      `aria-selected` flag and its own visible panel — that's what makes
+      the imported Figma component look like a real tabbed control.
+    -->
+    <div data-figma-component="SettingsTabs">
+      <!-- Variant: overview -->
+      <section
+        class="tabs"
+        data-figma-variant="overview"
+      >
+        <div class="tablist">
+          <button class="tab" aria-selected="true">Overview</button>
+          <button class="tab" data-figma-on-click="usage@200ms:ease-out">Usage</button>
+          <button class="tab" data-figma-on-click="security@200ms:ease-out">Security</button>
+        </div>
+        <div class="panel overview">
+          <h3>Overview</h3>
+          <p>High-level summary of the workspace, including active members
+            and recent activity.</p>
+        </div>
+      </section>
+
+      <!-- Variant: usage -->
+      <section
+        class="tabs"
+        data-figma-variant="usage"
+      >
+        <div class="tablist">
+          <button class="tab" data-figma-on-click="overview@200ms:ease-out">Overview</button>
+          <button class="tab" aria-selected="true">Usage</button>
+          <button class="tab" data-figma-on-click="security@200ms:ease-out">Security</button>
+        </div>
+        <div class="panel usage">
+          <h3>Usage</h3>
+          <p>Monthly API calls, storage, and seats consumed against your
+            current plan limits.</p>
+        </div>
+      </section>
+
+      <!-- Variant: security -->
+      <section
+        class="tabs"
+        data-figma-variant="security"
+      >
+        <div class="tablist">
+          <button class="tab" data-figma-on-click="overview@200ms:ease-out">Overview</button>
+          <button class="tab" data-figma-on-click="usage@200ms:ease-out">Usage</button>
+          <button class="tab" aria-selected="true">Security</button>
+        </div>
+        <div class="panel security">
+          <h3>Security</h3>
+          <p>SSO, audit logs, and access tokens — enforce policies across
+            every member of your workspace.</p>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

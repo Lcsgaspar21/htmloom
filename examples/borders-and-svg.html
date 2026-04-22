@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>HTMLoom — per-side borders & SVG sprites</title>
+  <style>
+    :root {
+      --bg: #f7f7fb;
+      --fg: #1f2330;
+      --muted: #6b7184;
+      --line: #e3e5ee;
+      --line-strong: #c8ccd9;
+      --brand: #5b54d6;
+      --warn: #c2410c;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-6: 24px;
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: var(--space-6);
+      font: 14px/1.45 system-ui, sans-serif;
+      color: var(--fg);
+      background: var(--bg);
+    }
+    h1 { font-size: 18px; margin: 0 0 var(--space-4) 0; }
+
+    /* ---------- per-side borders ---------- */
+    .stack { display: flex; flex-direction: column; gap: var(--space-4); width: 480px; }
+
+    .card {
+      background: #fff;
+      border-radius: var(--radius);
+      /* Uniform border — should still use Figma's stroke (single-fill path). */
+      border: 1px solid var(--line);
+      padding: var(--space-4);
+    }
+
+    .table {
+      background: #fff;
+      border-radius: var(--radius);
+      overflow: hidden;
+      /* Outer border + per-row separators to exercise per-side borders. */
+      border: 1px solid var(--line);
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-3) var(--space-4);
+      border-bottom: 1px solid var(--line); /* per-side */
+    }
+    .row:last-child { border-bottom: none; }
+    .row .label { flex: 1; }
+    .row .value { color: var(--muted); }
+
+    .callout {
+      padding: var(--space-3) var(--space-4);
+      background: #fff7ed;
+      color: var(--warn);
+      /* Sidebar accent: only the left edge has a coloured bar. */
+      border-left: 4px solid var(--warn);
+      border-top-right-radius: 8px;
+      border-bottom-right-radius: 8px;
+    }
+
+    .ribbon {
+      padding: var(--space-3) var(--space-4);
+      background: #fff;
+      /* Mixed sides: thicker top, lighter bottom — classic header pattern. */
+      border-top: 3px solid var(--brand);
+      border-bottom: 1px solid var(--line);
+    }
+
+    /* ---------- SVG sprite (uses <use>) ---------- */
+    .icons { display: flex; gap: var(--space-3); padding: var(--space-3) 0; color: var(--brand); }
+    .icons svg { width: 20px; height: 20px; fill: currentColor; }
+  </style>
+</head>
+<body>
+  <h1>Borders & SVG sprite</h1>
+
+  <!-- Sprite definition (consumed via <use>) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="ic-check" viewBox="0 0 24 24">
+      <path d="M5 12l4 4 10-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ic-bell" viewBox="0 0 24 24">
+      <path d="M12 3a6 6 0 0 0-6 6v3l-2 3h16l-2-3V9a6 6 0 0 0-6-6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M10 19a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+  </svg>
+
+  <div class="stack">
+    <div class="card">
+      <strong>Uniform border</strong>
+      <p>A regular 1px border on all 4 sides — converts to a single Figma stroke.</p>
+    </div>
+
+    <div class="ribbon">
+      <strong>Mixed border (top + bottom)</strong>
+    </div>
+
+    <div class="callout">
+      <strong>Left-accent callout</strong> — only the left edge is coloured.
+    </div>
+
+    <div class="table">
+      <div class="row"><div class="label">Plan</div><div class="value">Pro</div></div>
+      <div class="row"><div class="label">Seats</div><div class="value">12</div></div>
+      <div class="row"><div class="label">Renews</div><div class="value">Jan 2027</div></div>
+    </div>
+
+    <div class="icons">
+      <svg><use href="#ic-check" /></svg>
+      <svg><use href="#ic-bell" /></svg>
+      <span>Sprite icons should now render via inlined &lt;use&gt;.</span>
+    </div>
+  </div>
+</body>
+</html>

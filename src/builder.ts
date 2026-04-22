@@ -8,6 +8,7 @@
 import type {
   AutoLayoutHint,
   AxisSizing,
+  BorderSide,
   CaptureResult,
   CapturedNode,
   ComponentSpec,
@@ -237,11 +238,84 @@ async function buildFrame(
     applyContainerOwnHug(frame, node);
   }
 
+  // Per-side borders ride on top of whatever flow this frame uses (auto-
+  // layout or absolute) by adding 4 absolutely-anchored rectangles. Done
+  // last so they never participate in auto-layout sizing/spacing.
+  appendPerSideBorders(frame, node, ctx, useAutoLayout);
+
   if (isRoot) {
     frame.x = 0;
     frame.y = 0;
   }
   return frame;
+}
+
+/**
+ * Emits up to 4 thin RectangleNode children along the frame's edges to
+ * model non-uniform borders (e.g. `border-bottom: 1px solid`). Each rect
+ * is sized to its edge, positioned absolutely, and bound to the matching
+ * edge constraints so it survives frame resizes inside Figma.
+ *
+ * Skipped (returns silently) when the captured border is uniform — that
+ * path is handled by `applyVisuals` with a single Figma stroke.
+ */
+function appendPerSideBorders(
+  frame: FrameNode,
+  source: CapturedNode,
+  ctx: BuildContext,
+  useAutoLayout: boolean,
+): void {
+  const sides = source.border.sides;
+  if (!sides) return;
+
+  const W = frame.width;
+  const H = frame.height;
+  const colorBinding = source.tokenBindings.border;
+
+  const make = (
+    name: string,
+    side: BorderSide,
+    rect: { x: number; y: number; w: number; h: number },
+    constraints: Constraints,
+  ): void => {
+    if (side.width <= 0 || !side.color) return;
+    const r = figma.createRectangle();
+    r.name = name;
+    r.resize(Math.max(0.5, rect.w), Math.max(0.5, rect.h));
+    r.fills = [bindSolid(side.color, ctx, colorBinding)];
+    frame.appendChild(r);
+    if (useAutoLayout && "layoutPositioning" in r) {
+      (r as unknown as { layoutPositioning: "AUTO" | "ABSOLUTE" }).layoutPositioning = "ABSOLUTE";
+    }
+    r.x = rect.x;
+    r.y = rect.y;
+    r.constraints = constraints;
+  };
+
+  make(
+    "border-top",
+    sides.top,
+    { x: 0, y: 0, w: W, h: sides.top.width },
+    { horizontal: "STRETCH", vertical: "MIN" },
+  );
+  make(
+    "border-bottom",
+    sides.bottom,
+    { x: 0, y: H - sides.bottom.width, w: W, h: sides.bottom.width },
+    { horizontal: "STRETCH", vertical: "MAX" },
+  );
+  make(
+    "border-left",
+    sides.left,
+    { x: 0, y: 0, w: sides.left.width, h: H },
+    { horizontal: "MIN", vertical: "STRETCH" },
+  );
+  make(
+    "border-right",
+    sides.right,
+    { x: W - sides.right.width, y: 0, w: sides.right.width, h: H },
+    { horizontal: "MAX", vertical: "STRETCH" },
+  );
 }
 
 /* ---------- Phase 6 sizing helpers ---------- */
@@ -730,7 +804,14 @@ async function applyVisuals(
   }
   (node as FrameNode).fills = fills;
 
-  if (source.border.width > 0 && source.border.color) {
+  // Per-side borders are painted later (in `buildFrame`) as 4 absolutely-
+  // positioned children so we can model `border-bottom: 1px solid` etc.
+  // Here we only handle the uniform-border path with a Figma stroke.
+  if (
+    source.border.sides === null &&
+    source.border.width > 0 &&
+    source.border.color
+  ) {
     (node as FrameNode).strokes = [
       bindSolid(source.border.color, ctx, source.tokenBindings.border),
     ];

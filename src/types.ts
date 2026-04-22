@@ -31,10 +31,29 @@ export interface Padding {
   left: number;
 }
 
-export interface BorderStyle {
+export interface BorderSide {
   width: number;
   color: RGBA | null;
+}
+
+export interface BorderStyle {
+  /** Dominant side width; used when {@link sides} is null (uniform border). */
+  width: number;
+  /** Dominant side colour; used when {@link sides} is null. */
+  color: RGBA | null;
   radius: { tl: number; tr: number; br: number; bl: number };
+  /**
+   * Per-side widths/colours when the four sides are not uniform. When set,
+   * the builder paints four absolutely-positioned rectangles inside the
+   * frame (Builder.io-style) instead of using a single Figma stroke, so
+   * patterns like `border-bottom: 1px solid` render correctly.
+   */
+  sides: {
+    top: BorderSide;
+    right: BorderSide;
+    bottom: BorderSide;
+    left: BorderSide;
+  } | null;
 }
 
 /**
