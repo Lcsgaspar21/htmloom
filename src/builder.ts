@@ -672,14 +672,20 @@ function buildGradientPaint(g: Gradient, width: number, height: number): Gradien
  * matching the CSS `linear-gradient(<deg>, ...)` regardless of the box's
  * aspect ratio.
  *
- * CSS spec: the gradient line passes through the box centre at the given
- * angle, and its length is `|w·sin(θ)| + |h·cos(θ)|` so the perpendiculars
- * from each corner land exactly on the line. We compute start/end in pixel
- * space, normalise to unit-bbox, and pack them into Figma's transform.
+ * Strategy: work in PIXEL space (where angles are visually meaningful),
+ * compute start/end and a perpendicular vector there, and only then
+ * normalise to unit-bbox per axis. Doing the perpendicular computation
+ * in unit space (e.g. swapping with [-b, a]) fails on non-square boxes
+ * because the unit space is anisotropic — `width / height` distorts any
+ * 90° rotation.
  *
- * Caveat: this snapshot uses the captured HTML element's dimensions. If the
- * user resizes the frame in Figma, the visual angle drifts because Figma
- * keeps the unit-bbox transform constant.
+ * CSS spec: the gradient line passes through the centre at the given
+ * angle, and its length is `|w·sin(θ)| + |h·cos(θ)|` so the perpendiculars
+ * from each corner land exactly on the line.
+ *
+ * Caveat: this snapshot uses the captured HTML element's dimensions. If
+ * the user resizes the frame in Figma, the visual angle drifts because
+ * Figma keeps the unit-bbox transform constant.
  */
 function linearGradientTransform(angleDeg: number, width: number, height: number): Transform {
   const w = Math.max(1, width);
@@ -688,19 +694,28 @@ function linearGradientTransform(angleDeg: number, width: number, height: number
   const dx = Math.sin(rad);
   const dy = -Math.cos(rad);
   const length = Math.abs(w * dx) + Math.abs(h * dy);
-  const cx = w / 2;
-  const cy = h / 2;
-  const startPx = { x: cx - (length / 2) * dx, y: cy - (length / 2) * dy };
-  const endPx = { x: cx + (length / 2) * dx, y: cy + (length / 2) * dy };
-  const startX = startPx.x / w;
-  const startY = startPx.y / h;
-  const endX = endPx.x / w;
-  const endY = endPx.y / h;
-  const a = endX - startX;
-  const b = endY - startY;
+  // Direction vector in PIXEL space, scaled to span the full gradient line.
+  const dirPxX = length * dx;
+  const dirPxY = length * dy;
+  // Perpendicular in PIXEL space (90° rotation). Its magnitude is the
+  // same as the gradient line's; that gives Figma a sane third handle
+  // even though linear gradients ignore the perpendicular extent visually.
+  const perpPxX = -dirPxY;
+  const perpPxY = dirPxX;
+  // Start point of the gradient line in pixel space, centred on the bbox.
+  const startPxX = w / 2 - dirPxX / 2;
+  const startPxY = h / 2 - dirPxY / 2;
+  // Now collapse pixel space → unit-bbox by dividing each component by
+  // its own axis. This is where aspect ratio is correctly accounted for.
+  const startX = startPxX / w;
+  const startY = startPxY / h;
+  const a = dirPxX / w;
+  const d = dirPxY / h;
+  const b = perpPxX / w;
+  const e = perpPxY / h;
   return [
-    [a, -b, startX],
-    [b, a, startY],
+    [a, b, startX],
+    [d, e, startY],
   ];
 }
 
