@@ -23,6 +23,8 @@ import type {
   TextDecoration,
   TextRun,
   TextStyle,
+  TokenBindings,
+  TokenKind,
   TriggerEvent,
   TriggerSpec,
   VariantSpec,
@@ -39,7 +41,10 @@ const INLINE_TAGS = new Set([
   "MARK", "INS", "DEL", "Q", "ABBR", "SUB", "SUP",
 ]);
 
-export function captureDocument(doc: Document, rootSelector = "body"): CaptureResult {
+export async function captureDocument(
+  doc: Document,
+  rootSelector = "body",
+): Promise<CaptureResult> {
   const root = doc.querySelector(rootSelector) as HTMLElement | null;
   if (!root) throw new Error(`HTMLoom: root element not found for selector "${rootSelector}"`);
 
@@ -52,6 +57,11 @@ export function captureDocument(doc: Document, rootSelector = "body"): CaptureRe
   if (!tree) throw new Error("HTMLoom: root element produced no captured node");
 
   const tokens = captureTokens(doc);
+
+  // Async post-pass: rasterise any SVG payloads we captured (inline `<svg>`
+  // and `background-image: url(*.svg)`) into PNG data URIs so Figma's
+  // `createImage` accepts them.
+  await rasterizeSvgs(tree);
 
   return {
     rootName: doc.title || "HTMLoom Import",
@@ -74,11 +84,16 @@ function captureTokens(doc: Document): DesignToken[] {
     if (!prop || !prop.startsWith("--")) continue;
     const value = cs.getPropertyValue(prop).trim();
     if (!value) continue;
+    const classified = classifyTokenValue(value);
+    if (classified.kind === "SKIP") continue;
     out.push({
       name: tokenName(prop),
       cssName: prop,
       value,
-      resolvedColor: parseColor(value),
+      kind: classified.kind,
+      resolvedColor: classified.kind === "COLOR" ? parseColor(value) : null,
+      numericValue: classified.numericValue ?? null,
+      stringValue: classified.stringValue ?? null,
     });
   }
   return out;
@@ -88,6 +103,102 @@ function tokenName(cssProp: string): string {
   // `--color-brand-500` -> `color/brand/500`. Custom slashes already in the
   // name (rare but legal in CSS via escaping) survive as-is.
   return cssProp.replace(/^--/, "").replace(/-/g, "/");
+}
+
+/**
+ * Decides which Variable type a CSS custom property maps to. Numeric values
+ * with px/rem/em units fold into NUMBER (rem/em assume a 16px base). Plain
+ * identifier-like strings fold into STRING. Anything else is left aside —
+ * the user can still see the value in `cssName` for debugging.
+ */
+function classifyTokenValue(value: string): {
+  kind: TokenKind;
+  numericValue?: number;
+  stringValue?: string;
+} {
+  if (parseColor(value)) return { kind: "COLOR" };
+
+  const numMatch = value.match(/^(-?\d+(?:\.\d+)?)\s*(px|rem|em)?$/);
+  if (numMatch) {
+    let n = parseFloat(numMatch[1]);
+    const unit = numMatch[2];
+    if (unit === "rem" || unit === "em") n *= 16;
+    return { kind: "NUMBER", numericValue: n };
+  }
+
+  // Treat short identifier-ish strings as STRING tokens (font families,
+  // keywords like `bold`, `inherit`, etc.). We deliberately skip anything
+  // with parentheses, semicolons, or url(...) — those rarely round-trip.
+  if (/^[\w\s.,'"#/-]{1,80}$/.test(value)) {
+    return { kind: "STRING", stringValue: value.replace(/['"]/g, "").trim() };
+  }
+
+  return { kind: "SKIP" };
+}
+
+/* ---------- SVG rasterisation post-pass ---------- */
+
+async function rasterizeSvgs(node: CapturedNode): Promise<void> {
+  if (node.imageSrc && isSvgSource(node.imageSrc)) {
+    const png = await tryRasterizeSvg(node.imageSrc, node.box.width, node.box.height);
+    if (png) node.imageSrc = png;
+  }
+  if (node.backgroundImageUrl && isSvgSource(node.backgroundImageUrl)) {
+    const png = await tryRasterizeSvg(
+      node.backgroundImageUrl,
+      node.box.width,
+      node.box.height,
+    );
+    if (png) node.backgroundImageUrl = png;
+  }
+  if (node.component) {
+    for (const variant of node.component.variants) await rasterizeSvgs(variant.tree);
+  }
+  for (const child of node.children) await rasterizeSvgs(child);
+}
+
+function isSvgSource(src: string): boolean {
+  return src.startsWith("data:image/svg") || /\.svg(?:\?|#|$)/i.test(src);
+}
+
+async function tryRasterizeSvg(
+  src: string,
+  width: number,
+  height: number,
+): Promise<string | null> {
+  try {
+    return await rasterizeSvg(src, width, height);
+  } catch (err) {
+    console.warn("[HTMLoom] SVG rasterisation failed; falling back:", err);
+    return null;
+  }
+}
+
+/**
+ * Loads an SVG (data URI or remote URL) into an `<img>`, draws it onto a
+ * 2x-scaled canvas, and exports a PNG data URI. Remote URLs require either
+ * same-origin or CORS-friendly headers — when CORS taints the canvas, the
+ * `toDataURL` call throws and we fall back to the original (broken) source.
+ */
+async function rasterizeSvg(src: string, width: number, height: number): Promise<string> {
+  const targetW = Math.max(1, Math.round(width || 32));
+  const targetH = Math.max(1, Math.round(height || 32));
+  const img = new Image();
+  if (!src.startsWith("data:")) img.crossOrigin = "anonymous";
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error(`image load failed: ${src.slice(0, 80)}…`));
+    img.src = src;
+  });
+  // 2x scale so SVG icons stay sharp at the captured layer's native size.
+  const scale = 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = targetW * scale;
+  canvas.height = targetH * scale;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2D context unavailable");
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/png");
 }
 
 function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | null {
@@ -173,10 +284,11 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     children: [],
     component: componentName ? captureComponent(el, componentName, path) : null,
     triggers: parseTriggers(el),
+    tokenBindings: parseTokenBindings(el),
   };
 
   if (isDecoratedTextLeaf && !componentName) {
-    node.children.push(synthesizeTextChild(textSpec!, path));
+    node.children.push(synthesizeTextChild(textSpec!, path, node.tokenBindings.text));
   } else if (kind === "FRAME" && !componentName) {
     // Components are driven by their variants; ignore raw children.
     // Pass `el` as the new root so child boxes are PARENT-relative — passing
@@ -198,7 +310,11 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
  * a TEXT child that lives inside the frame's padding. The text node itself
  * carries no decoration — that's all on the parent.
  */
-function synthesizeTextChild(text: TextStyle, parentPath: string): CapturedNode {
+function synthesizeTextChild(
+  text: TextStyle,
+  parentPath: string,
+  inheritedTextToken: string | null,
+): CapturedNode {
   return {
     id: `${parentPath}.t`,
     kind: "TEXT",
@@ -219,6 +335,9 @@ function synthesizeTextChild(text: TextStyle, parentPath: string): CapturedNode 
     children: [],
     component: null,
     triggers: [],
+    // Decorated text leaves can carry `data-figma-token-text` on the parent;
+    // forward it so the synthesised TEXT child can bind its fill.
+    tokenBindings: { background: null, text: inheritedTextToken, border: null },
   };
 }
 
@@ -311,6 +430,30 @@ function parseTriggers(el: HTMLElement): TriggerSpec[] {
   return Array.from(byEvent, ([event, targetVariant]) => ({ event, targetVariant }));
 }
 
+/**
+ * Reads `data-figma-token-bg`, `-text` and `-border` attributes. These let
+ * authors override the auto-binder when the resolved RGBA isn't unique
+ * (e.g. when both `--surface` and `--canvas` resolve to `#fff`) or when
+ * they want the binding regardless of computed colour.
+ *
+ * Convenience aliases: `data-figma-token` and `-fill` map to background.
+ */
+function parseTokenBindings(el: HTMLElement): TokenBindings {
+  const bg =
+    el.getAttribute("data-figma-token-bg") ??
+    el.getAttribute("data-figma-token-fill") ??
+    el.getAttribute("data-figma-token");
+  const text = el.getAttribute("data-figma-token-text");
+  const border =
+    el.getAttribute("data-figma-token-border") ??
+    el.getAttribute("data-figma-token-stroke");
+  return {
+    background: bg || null,
+    text: text || null,
+    border: border || null,
+  };
+}
+
 /* ---------- helpers ---------- */
 
 function inferKind(el: HTMLElement, directText: string): NodeKind {
@@ -400,8 +543,12 @@ function extractTextSpec(
 ): TextStyle | null {
   if (el.children.length === 0) {
     if (!directText) return null;
-    return buildTextStyle(directText, style, [
-      makeRun(0, directText.length, style),
+    const ws = style.whiteSpace;
+    const characters = preservesWhitespace(ws)
+      ? trimByPreMode(directText, ws)
+      : directText;
+    return buildTextStyle(characters, style, [
+      makeRun(0, characters.length, style, parseDecoration(style)),
     ]);
   }
   if (!isRichTextCandidate(el, style)) return null;
@@ -467,6 +614,13 @@ function allDescendantsInline(el: HTMLElement): boolean {
 interface RichTextItem {
   text: string;
   style: CSSStyleDeclaration;
+  /**
+   * Decoration accumulated from every ancestor in the inline chain. CSS
+   * doesn't inherit `text-decoration-line` to a child's computed style, so
+   * we propagate it manually — otherwise `<a><strong>x</strong></a>` would
+   * lose the underline on the inner range.
+   */
+  decoration: TextDecoration;
 }
 
 function collectRichText(
@@ -474,11 +628,13 @@ function collectRichText(
   parentStyle: CSSStyleDeclaration,
 ): { characters: string; runs: TextRun[] } {
   const items: RichTextItem[] = [];
-  collectRichTextInto(el, parentStyle, items);
+  const preserveWhitespace = preservesWhitespace(parentStyle.whiteSpace);
+  collectRichTextInto(el, parentStyle, parseDecoration(parentStyle), items, preserveWhitespace);
 
   // Trim leading whitespace of the first run and trailing of the last,
   // matching how CSS strips boundary whitespace inside text containers.
-  if (items.length > 0) {
+  // Skip when the container preserves whitespace (`pre`, `pre-wrap`, ...).
+  if (!preserveWhitespace && items.length > 0) {
     items[0].text = items[0].text.replace(/^\s+/, "");
     items[items.length - 1].text = items[items.length - 1].text.replace(/\s+$/, "");
   }
@@ -489,7 +645,7 @@ function collectRichText(
     if (!item.text) continue;
     const start = characters.length;
     characters += item.text;
-    runs.push(makeRun(start, characters.length, item.style));
+    runs.push(makeRun(start, characters.length, item.style, item.decoration));
   }
   return { characters, runs };
 }
@@ -503,30 +659,40 @@ function collectRichText(
 function collectRichTextInto(
   el: HTMLElement,
   currentStyle: CSSStyleDeclaration,
+  ambientDecoration: TextDecoration,
   items: RichTextItem[],
+  preserveWhitespace: boolean,
 ): void {
   for (const node of Array.from(el.childNodes)) {
     if (node.nodeType === Node.TEXT_NODE) {
-      const txt = collapseWhitespace(node.textContent || "");
+      const raw = node.textContent || "";
+      const txt = preserveWhitespace ? raw : collapseWhitespace(raw);
       if (!txt) continue;
-      items.push({ text: txt, style: currentStyle });
+      items.push({ text: txt, style: currentStyle, decoration: ambientDecoration });
       continue;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) continue;
     const child = node as HTMLElement;
     const childStyle = window.getComputedStyle(child);
     if (childStyle.display === "none") continue;
+    const childDecoration = mergeDecoration(ambientDecoration, parseDecoration(childStyle));
     if (child.children.length === 0) {
-      const txt = collapseWhitespace(child.textContent || "");
+      const raw = child.textContent || "";
+      const txt = preserveWhitespace ? raw : collapseWhitespace(raw);
       if (!txt) continue;
-      items.push({ text: txt, style: childStyle });
+      items.push({ text: txt, style: childStyle, decoration: childDecoration });
     } else {
-      collectRichTextInto(child, childStyle, items);
+      collectRichTextInto(child, childStyle, childDecoration, items, preserveWhitespace);
     }
   }
 }
 
-function makeRun(start: number, end: number, s: CSSStyleDeclaration): TextRun {
+function makeRun(
+  start: number,
+  end: number,
+  s: CSSStyleDeclaration,
+  decoration: TextDecoration,
+): TextRun {
   return {
     start,
     end,
@@ -535,7 +701,7 @@ function makeRun(start: number, end: number, s: CSSStyleDeclaration): TextRun {
     italic: isItalic(s),
     fontSize: parsePx(s.fontSize) || 14,
     color: parseColor(s.color) || { r: 0, g: 0, b: 0, a: 1 },
-    textDecoration: parseDecoration(s),
+    textDecoration: decoration,
   };
 }
 
@@ -543,6 +709,31 @@ function collapseWhitespace(s: string): string {
   // CSS would collapse runs of whitespace to a single space and trim newlines
   // around block boundaries. For inline runs we keep internal single spaces.
   return s.replace(/\s+/g, " ");
+}
+
+function preservesWhitespace(whiteSpace: string | null | undefined): boolean {
+  if (!whiteSpace) return false;
+  return whiteSpace === "pre" || whiteSpace === "pre-wrap" || whiteSpace === "pre-line";
+}
+
+/**
+ * For `pre` / `pre-wrap` we keep all whitespace and newlines verbatim.
+ * `pre-line` collapses runs of horizontal spaces but preserves newlines.
+ */
+function trimByPreMode(s: string, whiteSpace: string): string {
+  if (whiteSpace === "pre-line") return s.replace(/[ \t]+/g, " ");
+  return s;
+}
+
+/**
+ * `text-decoration-line` is the only field we surface today. Any non-NONE
+ * ancestor wins; child overrides are ignored when the ancestor already
+ * decorates the run (matching how the underline visually paints over the
+ * descendant glyphs in CSS).
+ */
+function mergeDecoration(ambient: TextDecoration, own: TextDecoration): TextDecoration {
+  if (ambient !== "NONE") return ambient;
+  return own;
 }
 
 function pickFontFamily(s: CSSStyleDeclaration): string {

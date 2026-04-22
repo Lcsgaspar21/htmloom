@@ -20,6 +20,13 @@ import type {
   TriggerSpec,
 } from "./types";
 
+interface TokenIndex {
+  /** RGBA key → Variable, used for the implicit auto-binder. */
+  byColor: Map<string, Variable>;
+  /** Variable name (e.g. `color/brand/500`) → Variable, used for explicit `data-figma-token-*` overrides. */
+  byName: Map<string, Variable>;
+}
+
 const FALLBACK_FONT: FontName = { family: "Inter", style: "Regular" };
 const TOKEN_COLLECTION_NAME = "HTMLoom Tokens";
 const loadedFonts = new Set<string>();
@@ -34,11 +41,12 @@ interface BuildContext {
    */
   variantSets: Map<string, Map<string, ComponentNode>>;
   /**
-   * `r,g,b,a` key → Figma colour Variable. Built once per import from the
-   * page's CSS custom properties so SOLID fills with matching colour values
-   * end up bound to the variable instead of using a literal RGBA.
+   * Token lookup tables built from the page's CSS custom properties:
+   * - `byColor` powers the implicit auto-binder (matching RGBA → bound paint)
+   * - `byName`  powers explicit `data-figma-token-*` overrides
+   * Built once per import so subsequent fills reuse the same Variables.
    */
-  colorBindings: Map<string, Variable>;
+  tokens: TokenIndex;
 }
 
 export async function buildFromCapture(capture: CaptureResult): Promise<SceneNode> {
@@ -50,7 +58,7 @@ export async function buildFromCapture(capture: CaptureResult): Promise<SceneNod
   const ctx: BuildContext = {
     nodeIdMap: new Map(),
     variantSets: new Map(),
-    colorBindings: await buildColorBindings(capture.tokens),
+    tokens: await buildTokenIndex(capture.tokens),
   };
 
   const root = await createNodeFor(capture.tree, true, ctx);
@@ -306,6 +314,7 @@ function buildTrigger(event: TriggerEvent): Trigger {
 
 function buildText(node: CapturedNode, ctx: BuildContext): TextNode {
   const t = node.text!;
+  const explicitTextToken = node.tokenBindings.text;
   const text = figma.createText();
   const baseFont = resolveFont(t.fontFamily, t.fontWeight, t.italic);
   text.fontName = baseFont;
@@ -314,15 +323,20 @@ function buildText(node: CapturedNode, ctx: BuildContext): TextNode {
   text.textAlignHorizontal = t.textAlign === "JUSTIFIED" ? "JUSTIFIED" : t.textAlign;
   if (t.lineHeight) text.lineHeight = { value: t.lineHeight, unit: "PIXELS" };
   if (t.letterSpacing) text.letterSpacing = { value: t.letterSpacing, unit: "PIXELS" };
-  text.fills = [bindSolid(t.color, ctx)];
+  text.fills = [bindSolid(t.color, ctx, explicitTextToken)];
   if (t.textDecoration !== "NONE") text.textDecoration = t.textDecoration;
   text.name = node.label || "text";
   text.resize(Math.max(1, node.box.width), Math.max(1, node.box.height));
-  if (t.runs) applyTextRuns(text, t.runs, ctx);
+  if (t.runs) applyTextRuns(text, t.runs, ctx, explicitTextToken);
   return text;
 }
 
-function applyTextRuns(text: TextNode, runs: TextRun[], ctx: BuildContext): void {
+function applyTextRuns(
+  text: TextNode,
+  runs: TextRun[],
+  ctx: BuildContext,
+  explicitTextToken: string | null,
+): void {
   for (const run of runs) {
     if (run.start >= run.end) continue;
     const font = resolveFont(run.fontFamily, run.fontWeight, run.italic);
@@ -332,7 +346,9 @@ function applyTextRuns(text: TextNode, runs: TextRun[], ctx: BuildContext): void
       // Font not loaded for this range — leave as the base font.
     }
     text.setRangeFontSize(run.start, run.end, run.fontSize);
-    text.setRangeFills(run.start, run.end, [bindSolid(run.color, ctx)]);
+    // The explicit token applies to every run — `data-figma-token-text` is a
+    // node-level override, so per-run colours all bind to the same Variable.
+    text.setRangeFills(run.start, run.end, [bindSolid(run.color, ctx, explicitTextToken)]);
     if (run.textDecoration !== "NONE") {
       text.setRangeTextDecoration(run.start, run.end, run.textDecoration);
     }
@@ -388,10 +404,10 @@ async function applyVisuals(
 ): Promise<void> {
   const fills: Paint[] = [];
   if (source.background) {
-    fills.push(bindSolid(source.background, ctx));
+    fills.push(bindSolid(source.background, ctx, source.tokenBindings.background));
   }
   if (source.gradient) {
-    fills.push(buildGradientPaint(source.gradient));
+    fills.push(buildGradientPaint(source.gradient, source.box.width, source.box.height));
   }
   if (source.backgroundImageUrl) {
     const imagePaint = await buildImagePaint(source.backgroundImageUrl);
@@ -400,7 +416,9 @@ async function applyVisuals(
   (node as FrameNode).fills = fills;
 
   if (source.border.width > 0 && source.border.color) {
-    (node as FrameNode).strokes = [bindSolid(source.border.color, ctx)];
+    (node as FrameNode).strokes = [
+      bindSolid(source.border.color, ctx, source.tokenBindings.border),
+    ];
     (node as FrameNode).strokeWeight = source.border.width;
   }
 
@@ -416,41 +434,80 @@ async function applyVisuals(
 
 /**
  * Walks the captured tokens, ensures the `HTMLoom Tokens` collection exists,
- * and creates one Color variable per token whose value resolves to a colour.
- * Returns a colour-keyed lookup that `bindSolid` consults when emitting fills.
+ * and creates one Variable per token. Colour tokens drop into the
+ * RGBA-keyed `byColor` map so `bindSolid` can auto-bind matching fills.
+ * Number / string tokens are created but not auto-bound — they're available
+ * by name for explicit `data-figma-token-*` overrides only.
  */
-async function buildColorBindings(tokens: DesignToken[]): Promise<Map<string, Variable>> {
-  const colorTokens = tokens.filter((t): t is DesignToken & { resolvedColor: RGBA } =>
-    t.resolvedColor !== null,
-  );
-  if (colorTokens.length === 0) return new Map();
+async function buildTokenIndex(tokens: DesignToken[]): Promise<TokenIndex> {
+  const empty: TokenIndex = { byColor: new Map(), byName: new Map() };
+  const usable = tokens.filter((t) => t.kind !== "SKIP");
+  if (usable.length === 0) return empty;
 
   const collection = await getOrCreateCollection(TOKEN_COLLECTION_NAME);
   const modeId = collection.defaultModeId || collection.modes[0].modeId;
-  const existingVariables = await figma.variables.getLocalVariablesAsync("COLOR");
-  const byName = new Map<string, Variable>();
-  for (const v of existingVariables) {
-    if (v.variableCollectionId === collection.id) byName.set(v.name, v);
+
+  // Index existing variables across all relevant types to avoid duplicates
+  // when the user re-imports or runs multiple HTMLoom imports per file.
+  const existing = new Map<string, Variable>();
+  for (const type of ["COLOR", "FLOAT", "STRING"] as const) {
+    const list = await figma.variables.getLocalVariablesAsync(type);
+    for (const v of list) {
+      if (v.variableCollectionId === collection.id) existing.set(v.name, v);
+    }
   }
 
-  const bindings = new Map<string, Variable>();
-  for (const token of colorTokens) {
-    let variable = byName.get(token.name);
-    if (!variable) {
-      variable = figma.variables.createVariable(token.name, collection, "COLOR");
+  const out: TokenIndex = { byColor: new Map(), byName: new Map() };
+  for (const token of usable) {
+    const variable = upsertVariable(token, collection, modeId, existing);
+    if (!variable) continue;
+    out.byName.set(token.name, variable);
+    if (token.kind === "COLOR" && token.resolvedColor) {
+      const key = colorKey(token.resolvedColor);
+      // First token to claim a colour wins — deterministic when multiple
+      // tokens share the same value (e.g. semantic + primitive aliases).
+      if (!out.byColor.has(key)) out.byColor.set(key, variable);
     }
+  }
+  return out;
+}
+
+function upsertVariable(
+  token: DesignToken,
+  collection: VariableCollection,
+  modeId: string,
+  existing: Map<string, Variable>,
+): Variable | null {
+  const figmaType: VariableResolvedDataType =
+    token.kind === "COLOR" ? "COLOR" : token.kind === "NUMBER" ? "FLOAT" : "STRING";
+
+  let variable = existing.get(token.name);
+  if (variable && variable.resolvedType !== figmaType) {
+    // A variable with this name already exists but with a different type.
+    // Renaming or recreating it could break user bindings, so leave it alone
+    // and skip — the user will see a console warning.
+    console.warn(
+      `[HTMLoom] Variable "${token.name}" already exists with type ${variable.resolvedType}; skipping ${figmaType} import.`,
+    );
+    return null;
+  }
+  if (!variable) {
+    variable = figma.variables.createVariable(token.name, collection, figmaType);
+  }
+
+  if (token.kind === "COLOR" && token.resolvedColor) {
     variable.setValueForMode(modeId, {
       r: token.resolvedColor.r,
       g: token.resolvedColor.g,
       b: token.resolvedColor.b,
       a: token.resolvedColor.a,
     });
-    // First token to claim a colour wins — predictable and deterministic when
-    // multiple tokens hold the same value.
-    const key = colorKey(token.resolvedColor);
-    if (!bindings.has(key)) bindings.set(key, variable);
+  } else if (token.kind === "NUMBER" && token.numericValue !== null) {
+    variable.setValueForMode(modeId, token.numericValue);
+  } else if (token.kind === "STRING" && token.stringValue !== null) {
+    variable.setValueForMode(modeId, token.stringValue);
   }
-  return bindings;
+  return variable;
 }
 
 async function getOrCreateCollection(name: string): Promise<VariableCollection> {
@@ -461,13 +518,28 @@ async function getOrCreateCollection(name: string): Promise<VariableCollection> 
 }
 
 /**
- * Returns a SolidPaint for the given colour. When a Variable matches the
- * exact RGBA, the paint is bound to that Variable so future edits to the
- * token value flow through the imported design.
+ * Returns a SolidPaint for the given colour. Resolution order:
+ *  1. `explicitTokenName` (from `data-figma-token-*`) — bind if it exists
+ *     and resolves to a COLOR variable, regardless of RGBA match.
+ *  2. RGBA auto-bind via `tokens.byColor`.
+ *  3. Plain literal SolidPaint.
  */
-function bindSolid(color: RGBA, ctx: BuildContext): SolidPaint {
+function bindSolid(
+  color: RGBA,
+  ctx: BuildContext,
+  explicitTokenName: string | null = null,
+): SolidPaint {
   const paint: SolidPaint = { type: "SOLID", color: rgb(color), opacity: color.a };
-  const variable = ctx.colorBindings.get(colorKey(color));
+  if (explicitTokenName) {
+    const explicit = ctx.tokens.byName.get(explicitTokenName);
+    if (explicit && explicit.resolvedType === "COLOR") {
+      return figma.variables.setBoundVariableForPaint(paint, "color", explicit);
+    }
+    if (!explicit) {
+      console.warn(`[HTMLoom] Explicit token "${explicitTokenName}" not found in collection.`);
+    }
+  }
+  const variable = ctx.tokens.byColor.get(colorKey(color));
   if (!variable) return paint;
   return figma.variables.setBoundVariableForPaint(paint, "color", variable);
 }
@@ -487,7 +559,7 @@ async function buildImagePaint(url: string): Promise<ImagePaint | null> {
   }
 }
 
-function buildGradientPaint(g: Gradient): GradientPaint {
+function buildGradientPaint(g: Gradient, width: number, height: number): GradientPaint {
   const stops = g.stops.map((s) => ({
     position: clamp01(s.position),
     color: { r: s.color.r, g: s.color.g, b: s.color.b, a: s.color.a },
@@ -501,25 +573,46 @@ function buildGradientPaint(g: Gradient): GradientPaint {
   }
   return {
     type: "GRADIENT_LINEAR",
-    gradientTransform: linearGradientTransform(g.angleDeg),
+    gradientTransform: linearGradientTransform(g.angleDeg, width, height),
     gradientStops: stops,
   };
 }
 
 /**
  * Builds the 2x3 affine matrix that maps Figma's gradient unit space onto
- * the fill's bounding box. (0,0) -> start, (1,0) -> end, with the
- * perpendicular axis kept unit-length so the gradient line is centered.
+ * the fill's bounding box, while keeping the on-screen gradient angle
+ * matching the CSS `linear-gradient(<deg>, ...)` regardless of the box's
+ * aspect ratio.
+ *
+ * CSS spec: the gradient line passes through the box centre at the given
+ * angle, and its length is `|w·sin(θ)| + |h·cos(θ)|` so the perpendiculars
+ * from each corner land exactly on the line. We compute start/end in pixel
+ * space, normalise to unit-bbox, and pack them into Figma's transform.
+ *
+ * Caveat: this snapshot uses the captured HTML element's dimensions. If the
+ * user resizes the frame in Figma, the visual angle drifts because Figma
+ * keeps the unit-bbox transform constant.
  */
-function linearGradientTransform(angleDeg: number): Transform {
+function linearGradientTransform(angleDeg: number, width: number, height: number): Transform {
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
   const rad = (angleDeg * Math.PI) / 180;
   const dx = Math.sin(rad);
   const dy = -Math.cos(rad);
-  const startX = 0.5 - dx / 2;
-  const startY = 0.5 - dy / 2;
+  const length = Math.abs(w * dx) + Math.abs(h * dy);
+  const cx = w / 2;
+  const cy = h / 2;
+  const startPx = { x: cx - (length / 2) * dx, y: cy - (length / 2) * dy };
+  const endPx = { x: cx + (length / 2) * dx, y: cy + (length / 2) * dy };
+  const startX = startPx.x / w;
+  const startY = startPx.y / h;
+  const endX = endPx.x / w;
+  const endY = endPx.y / h;
+  const a = endX - startX;
+  const b = endY - startY;
   return [
-    [dx, -dy, startX],
-    [dy, dx, startY],
+    [a, -b, startX],
+    [b, a, startY],
   ];
 }
 

@@ -122,14 +122,68 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
   collection + same name → updated value). Re-importing different HTML with
   the same `--color-brand` value mutates the shared variable on purpose.
 
-## Phase 5 — On the table
+## Phase 5 — Authoring polish ✓
 
-- [ ] `<pre>` / `white-space: pre` (preserve newlines and runs of spaces)
-- [ ] `data-figma-token="color/brand-500"` explicit binding override
-- [ ] Number / String Variables for non-colour tokens (`--space-*`, `--radius-*`)
-- [ ] UI-side SVG → PNG rasterisation so SVG backgrounds round-trip
-- [ ] Aspect-ratio aware linear gradient transform
-- [ ] Honour `text-decoration` propagation through nested inline runs
+- [x] **UI-side SVG → PNG rasterisation** so inline `<svg>` icons and
+      `background-image: url(*.svg)` round-trip into Figma. Done in the UI
+      iframe via a `<canvas>` 2x-scale draw before sending the bytes.
+- [x] **Aspect-ratio aware linear gradient transform**. The on-screen
+      gradient angle now matches the CSS angle for non-square boxes.
+- [x] **Nested `text-decoration` propagation**. `<a><strong>x</strong></a>`
+      keeps the underline on the inner range.
+- [x] **`<pre>` / `white-space: pre / pre-wrap / pre-line`** — preserves
+      newlines and runs of spaces verbatim (or only newlines for `pre-line`).
+- [x] **Number and String Variables** for non-colour tokens. `--space-md: 8px`
+      becomes a `FLOAT` Variable (rem/em normalised to a 16px base);
+      identifier-like values become `STRING` Variables. Created in the
+      `HTMLoom Tokens` collection but not auto-bound — see explicit override.
+- [x] **Explicit `data-figma-token-*` binding override**. Three flavours:
+      `data-figma-token-bg` (alias `data-figma-token`, `-fill`),
+      `data-figma-token-text`, and `data-figma-token-border` (alias
+      `-stroke`). Forces the binding by Variable name even when the
+      computed RGBA wouldn't match the token value.
+- [x] `examples/phase5-fidelity.html` covering SVG icons, `<pre>`, the
+      aspect-ratio gradient, and explicit token overrides.
+
+### Known limits to revisit
+
+- **Inline SVG `currentColor` is not resolved before rasterisation.** The
+  `XMLSerializer` snapshot doesn't carry the parent text colour, so SVG
+  strokes / fills authored as `currentColor` fall back to black in the
+  rasterised PNG. Workaround: hardcode the colour in the SVG or replace
+  `currentColor` with the resolved value before import.
+- **External SVG URLs require CORS-friendly headers.** When the canvas
+  ends up tainted, we log a warning and the original (broken) source is
+  retained so Figma still surfaces a placeholder rather than crashing.
+- **Number / String tokens are not auto-bound.** Use
+  `data-figma-token-*` to bind paints by name; spacing / radius tokens
+  remain editable in Figma but not wired to padding / corner radius
+  fields. (Variable types for those layout fields land in a future phase.)
+- **A non-`COLOR` token name reused for an explicit `data-figma-token-bg`
+  binding is ignored** with a console warning. The binding API requires
+  the destination Variable to resolve to `COLOR`.
+- **Re-import with a token whose `kind` changed across runs is skipped**
+  (e.g., `--foo: 8px` → `--foo: #fff`). The original Variable type wins
+  to avoid silently breaking existing bindings; rename the token to free
+  the slot.
+- **Aspect-ratio aware gradient uses the captured HTML element's
+  dimensions.** If the user resizes the resulting Figma frame, the
+  gradient's visual angle drifts because Figma keeps the unit-bbox
+  transform constant. CSS-Figma fundamental mismatch.
+- **`text-decoration` ancestor wins on combination.** Figma TextNode
+  supports one decoration per range, so `<u>foo<s>bar</s>baz</u>` keeps
+  the outer underline across the entire range; the inner strikethrough
+  is dropped.
+
+## Phase 6 — On the table
+
+- [ ] Resolve inline SVG `currentColor` via the parent's computed text colour
+      before serialising (so icon strokes inherit correctly).
+- [ ] Layout-field Variable bindings (padding, item spacing, corner radius)
+      that consume the new Number tokens automatically.
+- [ ] Easing presets and configurable trigger delays for prototype reactions.
+- [ ] Multi-image `background` stacks (currently only the first layer wins).
+- [ ] Per-corner radius support for the auto-bind path.
 
 ## Phase 1 limits exposed by Phase 2 testing
 

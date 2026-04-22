@@ -173,12 +173,17 @@ export interface CapturedNode {
   component: ComponentSpec | null;
   /** Triggers declared via `data-figma-on-*` attributes. */
   triggers: TriggerSpec[];
+  /** Explicit `data-figma-token-*` overrides; `null` fields fall back to the auto-binder. */
+  tokenBindings: TokenBindings;
 }
+
+export type TokenKind = "COLOR" | "NUMBER" | "STRING" | "SKIP";
 
 /**
  * One CSS custom property (`--brand: #6e56cf`) discovered on `:root`. The
- * builder turns each colour-typed token into a Figma Variable inside the
- * `HTMLoom Tokens` collection and auto-binds matching solid fills.
+ * builder turns each typed token into a matching Figma Variable inside the
+ * `HTMLoom Tokens` collection. Colour tokens auto-bind to fills with the
+ * same RGBA; number / string tokens are created but not auto-bound.
  */
 export interface DesignToken {
   /** Variable name in Figma (CSS `-` becomes `/` so `--color-brand-500` -> `color/brand/500`). */
@@ -187,8 +192,25 @@ export interface DesignToken {
   cssName: string;
   /** Raw resolved value as returned by `getComputedStyle`. */
   value: string;
-  /** Parsed colour, when the value resolves to one. Non-colour tokens are kept for debugging only. */
+  /** Classification used by the builder to pick the Variable type. */
+  kind: TokenKind;
+  /** Set when kind === "COLOR". */
   resolvedColor: RGBA | null;
+  /** Set when kind === "NUMBER" — px-equivalent value (rem/em normalised to a 16px base). */
+  numericValue: number | null;
+  /** Set when kind === "STRING". */
+  stringValue: string | null;
+}
+
+/**
+ * Explicit `data-figma-token-*` overrides authored on an HTML element.
+ * When set, the builder binds the matching paint to the named Variable
+ * regardless of whether the colour value matches by RGBA.
+ */
+export interface TokenBindings {
+  background: string | null;
+  text: string | null;
+  border: string | null;
 }
 
 export interface CaptureResult {

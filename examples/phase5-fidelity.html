@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>HTMLoom · Phase 5 fidelity</title>
+    <style>
+      :root {
+        /* ---- COLOR tokens (auto-bind) ---- */
+        --color-canvas: #f7f7fb;
+        --color-surface: #ffffff;
+        --color-text: #14161b;
+        --color-text-muted: #5b6273;
+        --color-brand-500: #6e56cf;
+        --color-brand-600: #5a44ad;
+        --color-success: #1f9d55;
+        --color-border: #e5e7ef;
+        --color-code-bg: #1f1f2e;
+        --color-code-fg: #e6f6ff;
+
+        /* ---- NUMBER tokens (created, not auto-bound) ---- */
+        --space-xs: 6px;
+        --space-sm: 10px;
+        --space-md: 16px;
+        --space-lg: 24px;
+        --radius-sm: 6px;
+        --radius-md: 12px;
+        --radius-lg: 20px;
+
+        /* ---- STRING tokens ---- */
+        --font-family-base: Inter;
+        --font-family-mono: Menlo;
+      }
+
+      body {
+        margin: 0;
+        padding: 32px;
+        font-family: Inter, system-ui, sans-serif;
+        background: var(--color-canvas);
+        color: var(--color-text);
+      }
+
+      .stack {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+        max-width: 720px;
+      }
+
+      .card {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        box-shadow: 0 1px 2px rgba(20, 22, 27, 0.04),
+          0 8px 24px rgba(20, 22, 27, 0.06);
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .icon {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        background: rgba(110, 86, 207, 0.12);
+        color: var(--color-brand-500);
+      }
+
+      .eyebrow {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-text-muted);
+      }
+
+      .title {
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .body {
+        font-size: 14px;
+        line-height: 1.55;
+        color: var(--color-text-muted);
+      }
+
+      a {
+        color: var(--color-brand-500);
+        text-decoration: underline;
+      }
+
+      pre {
+        margin: 0;
+        background: var(--color-code-bg);
+        color: var(--color-code-fg);
+        font-family: Menlo, monospace;
+        font-size: 12.5px;
+        line-height: 1.55;
+        padding: 16px 18px;
+        border-radius: 10px;
+        white-space: pre;
+      }
+
+      .gradient-band {
+        height: 96px;
+        width: 100%;
+        border-radius: var(--radius-lg);
+        background: linear-gradient(
+          45deg,
+          #6e56cf 0%,
+          #ec4899 50%,
+          #f59e0b 100%
+        );
+      }
+
+      .pill {
+        align-self: flex-start;
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        background: var(--color-success);
+        color: #ffffff;
+      }
+
+      .pill--override {
+        /* The actual value here is grey, but `data-figma-token-bg` forces
+           the binding to `color/brand/500`. Designers can edit the token
+           and this pill follows. */
+        background: #6b7280;
+        color: #ffffff;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="stack">
+      <!-- Card 1: SVG icon round-trip + nested decoration -->
+      <div class="card">
+        <span class="eyebrow">SVG icons + nested links</span>
+        <div class="row">
+          <span class="icon">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round">
+              <path d="M12 2v20M2 12h20" />
+            </svg>
+          </span>
+          <span class="title">Inline SVG comes through as PNG</span>
+        </div>
+        <span class="body">
+          The plus icon on the left is an inline <code>&lt;svg&gt;</code>.
+          Phase 5 rasterises it in the UI iframe before sending the bytes
+          to Figma — see
+          <a><strong>this whole linked phrase</strong> with bold inside</a>
+          where the underline now propagates through the nested
+          <code>&lt;strong&gt;</code> run.
+        </span>
+      </div>
+
+      <!-- Card 2: <pre> preserves whitespace and newlines -->
+      <div class="card">
+        <span class="eyebrow">white-space: pre</span>
+        <span class="title">Code blocks keep their layout</span>
+        <pre>function bind(token) {
+  const v = collection.get(token.name);
+  if (!v) return null;
+  return setBoundVariableForPaint(paint, "color", v);
+}</pre>
+        <span class="body">
+          The <code>&lt;pre&gt;</code> above keeps newlines and runs of
+          spaces verbatim — Phase 5 honours
+          <code>white-space: pre / pre-wrap / pre-line</code>.
+        </span>
+      </div>
+
+      <!-- Card 3: aspect-ratio aware gradient -->
+      <div class="card">
+        <span class="eyebrow">Linear gradient</span>
+        <span class="title">45° looks like 45° on any aspect</span>
+        <div class="gradient-band"></div>
+        <span class="body">
+          Previously a 45° gradient on a wide rectangle landed as a
+          near-vertical band. The new transform compensates for the box's
+          aspect ratio so the visual angle matches the CSS angle.
+        </span>
+      </div>
+
+      <!-- Card 4: explicit token override -->
+      <div class="card">
+        <span class="eyebrow">data-figma-token override</span>
+        <span class="title">Bind a paint by name, ignore the value</span>
+        <span class="body">
+          The pill below has a literal grey <code>#6b7280</code>
+          background, but the <code>data-figma-token-bg</code> attribute
+          forces it to bind to <strong>color/brand/500</strong> in Figma.
+          Edit the token, the pill follows.
+        </span>
+        <span class="pill pill--override" data-figma-token-bg="color/brand/500">
+          Bound by name
+        </span>
+      </div>
+    </div>
+  </body>
+</html>

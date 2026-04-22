@@ -40,9 +40,27 @@ HTMLoom is a self-contained Figma plugin. It loads HTML in its own sandboxed ifr
 - Nested inline runs: `<p>The <a><strong>bold link</strong></a> here</p>`
   collapses into a single TEXT with three correctly-styled ranges
 
-Phase 5 (SVG-as-image rasterisation, value tokens, `<pre>`) is tracked in `docs/ROADMAP.md`.
+**Phase 5 — Authoring polish.** The last sharp edges, smoothed:
 
-### Authoring API (Phase 2)
+- Inline `<svg>` and `background-image: url(*.svg)` are rasterised to PNG
+  in the UI iframe before reaching Figma — icons round-trip cleanly
+- Linear gradients now respect aspect ratio: a 45° gradient on a wide
+  rectangle reads as 45° on screen
+- `text-decoration` propagates through nested inline runs
+  (`<a><strong>x</strong></a>` keeps the underline on the inner range)
+- `<pre>` and `white-space: pre / pre-wrap / pre-line` preserve newlines
+  and runs of spaces verbatim
+- `--space-*`, `--radius-*` and other non-colour tokens become Number /
+  String Variables in the same collection; identifiers become String tokens
+- Explicit `data-figma-token-bg | -text | -border="<variable name>"`
+  attribute overrides the auto-binder and pins a paint to a Variable by
+  name regardless of computed value
+
+Phase 6 (SVG `currentColor` resolution, layout-field bindings) is tracked in `docs/ROADMAP.md`.
+
+### Authoring API
+
+**Components & states (Phase 2):**
 
 ```html
 <div data-figma-component="alert-badge-popover">
@@ -60,6 +78,19 @@ After import you get a Figma Component Set named `alert-badge-popover` with two
 variants and a click reaction wired between them — drop an Instance into a
 prototype and it just works.
 
+**Explicit token bindings (Phase 5):**
+
+```html
+<!-- Bind this paint to color/brand/500 even though the computed value is grey -->
+<span class="pill" data-figma-token-bg="color/brand/500">Bound by name</span>
+
+<!-- Use a foreground / border token instead of an RGBA match -->
+<button data-figma-token-text="color/text/inverse"
+        data-figma-token-border="color/border/strong">…</button>
+```
+
+Useful when several tokens share a value (so the auto-binder can't pick deterministically) or when the literal CSS colour shouldn't constrain the binding.
+
 ## Develop
 
 ```bash
@@ -76,13 +107,14 @@ In Figma desktop:
 
 ## Try it
 
-The repo ships four examples used during development:
+The repo ships five examples used during development:
 
 ```
 examples/alert-priority-wireframe.html   # Phase 1 — static layout
 examples/popover-states.html             # Phase 2 — interactive variants
 examples/styled-card.html                # Phase 3 — gradients, shadows, runs
 examples/tokens-radial.html              # Phase 4 — tokens, radial, bg-url, nested
+examples/phase5-fidelity.html            # Phase 5 — SVG, <pre>, gradient, overrides
 ```
 
 Drop either onto the plugin window to verify your local build.

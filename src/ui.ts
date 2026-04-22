@@ -5,7 +5,7 @@
  */
 
 import { captureDocument } from "./walker";
-import type { MainToUi, UiToMain } from "./types";
+import type { CaptureResult, MainToUi, UiToMain } from "./types";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -85,20 +85,17 @@ importBtn.addEventListener("click", async () => {
   }
 });
 
-async function renderAndCapture(html: string) {
-  return new Promise<ReturnType<typeof captureDocument>>((resolve, reject) => {
+async function renderAndCapture(html: string): Promise<CaptureResult> {
+  return new Promise<CaptureResult>((resolve, reject) => {
     const onLoad = () => {
       sandbox.removeEventListener("load", onLoad);
       try {
         const doc = sandbox.contentDocument;
         if (!doc) throw new Error("Sandbox iframe has no document");
-        // Wait one frame so layout settles before measuring.
+        // Wait one frame so layout settles before measuring, then run the
+        // (now async) capture pipeline — SVG rasterisation lives there.
         requestAnimationFrame(() => {
-          try {
-            resolve(captureDocument(doc, "body"));
-          } catch (e) {
-            reject(e);
-          }
+          captureDocument(doc, "body").then(resolve, reject);
         });
       } catch (e) {
         reject(e);
