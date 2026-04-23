@@ -399,10 +399,22 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
       attribute nor an inline-style override. A `<style>.icon path {
       fill: currentColor }` rule now round-trips.
 
+## Phase 8 — `gradient + url(...)` stacks ✓
+
+- [x] **`background: gradient + url(...)` combos**. The walker now
+      always parses both gradient layers AND the URL layer (the
+      previous "skip URL when gradient present" guard is gone).
+      `imageLayerPrecedesGradient` records whether the URL was listed
+      BEFORE the first gradient in the CSS value, and the builder
+      pushes the image paint either at the bottom (when listed AFTER
+      gradients, gradient renders on top) or at the top (when listed
+      FIRST, URL renders on top). This faithfully reproduces patterns
+      like `background: linear-gradient(...), url(noise.png)` (gradient
+      overlays a textured base) and `background: url(noise.png),
+      linear-gradient(...)` (textured noise on top of a gradient).
+
 ## Phase 8 — Still on the table
 
-- [ ] Multi-image `background` stacks for `gradient + url(...)` combos
-      (currently still drops the URL when a gradient layer exists).
 - [ ] `justify-self` per-grid-item alignment override (currently
       ignored; cells inherit their captured width and the row's
       horizontal distribution).

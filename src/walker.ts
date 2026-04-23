@@ -324,9 +324,14 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
   const gradients = parseGradients(style.backgroundImage);
   const gradient = gradients[0] ?? null;
   const extraGradients = gradients.slice(1);
-  // Skip URL parsing when a gradient was found — CSS allows both, but we
-  // pick gradient as the dominant fill to keep paint stacks short.
-  const backgroundImageUrl = gradient ? null : parseBackgroundImageUrl(style.backgroundImage);
+  // Both URL and gradient layers can coexist in a single CSS
+  // `background-image` declaration (e.g. `background: url(noise.png),
+  // linear-gradient(...)`). We capture both and let the builder paint
+  // them in the right order — `backgroundImageOnTop` records whether
+  // the URL was listed before the first gradient (= renders on top).
+  const backgroundImageUrl = parseBackgroundImageUrl(style.backgroundImage);
+  const backgroundImageOnTop =
+    backgroundImageUrl !== null && imageLayerPrecedesGradient(style.backgroundImage);
   const shadows = parseShadows(style.boxShadow);
   const aspectRatio = parseAspectRatio(style);
   const borderInfo = parseBorder(style);
@@ -383,6 +388,7 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     gradient,
     extraGradients,
     backgroundImageUrl,
+    backgroundImageOnTop,
     shadows,
     aspectRatio,
     children: [],
@@ -455,6 +461,7 @@ function synthesizeTextChild(
     gradient: null,
     extraGradients: [],
     backgroundImageUrl: null,
+    backgroundImageOnTop: false,
     shadows: [],
     aspectRatio: null,
     children: [],
@@ -1219,6 +1226,31 @@ function collectStops(parts: string[]): ColorStop[] {
   return stops;
 }
 
+/**
+ * True when the first non-`url(...)` layer in the CSS `background-image`
+ * value is a gradient AND there's an earlier `url(...)` layer. Encodes
+ * the question "is the URL on top of the gradient stack?" — used by the
+ * builder to choose the paint order in `fills` so a CSS `url(noise),
+ * linear-gradient(...)` declaration paints the noise overlay above the
+ * gradient (which matches the on-screen render).
+ */
+function imageLayerPrecedesGradient(backgroundImage: string | null | undefined): boolean {
+  if (!backgroundImage || backgroundImage === "none") return false;
+  const layers = splitTopLevelCommas(backgroundImage);
+  let sawUrl = false;
+  for (const layer of layers) {
+    const trimmed = layer.trim();
+    if (/^url\s*\(/i.test(trimmed)) {
+      sawUrl = true;
+      continue;
+    }
+    if (/^(?:linear|radial|conic|repeating-linear|repeating-radial)-gradient\s*\(/i.test(trimmed)) {
+      return sawUrl;
+    }
+  }
+  return false;
+}
+
 function parseBackgroundImageUrl(backgroundImage: string | null | undefined): string | null {
   if (!backgroundImage || backgroundImage === "none") return null;
   // Try each quoting style independently so URL contents can include the
@@ -1772,6 +1804,7 @@ function synthesiseRowFrame(
     gradient: null,
     extraGradients: [],
     backgroundImageUrl: null,
+    backgroundImageOnTop: false,
     shadows: [],
     aspectRatio: null,
     children: cells,

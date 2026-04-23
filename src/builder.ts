@@ -889,6 +889,19 @@ async function applyVisuals(
   if (source.background) {
     fills.push(bindSolid(source.background, ctx, source.tokenBindings.background));
   }
+
+  // CSS-image layer that should sit BELOW the gradient stack — push it
+  // first so the gradients render on top in Figma (last fill = top).
+  // Triggered by `background: linear-gradient(...), url(noise.png)`
+  // where the gradient is listed first.
+  let imagePaint: Paint | null = null;
+  if (source.backgroundImageUrl) {
+    imagePaint = await buildImagePaint(source.backgroundImageUrl);
+  }
+  if (imagePaint && !source.backgroundImageOnTop && (source.gradient || source.extraGradients.length > 0)) {
+    fills.push(imagePaint);
+  }
+
   // Stacked CSS gradients: the FIRST listed paints on top in CSS, but
   // Figma renders the LAST entry of `fills` on top — so we push extras
   // in reverse first, then the primary gradient last (top-most).
@@ -900,9 +913,11 @@ async function applyVisuals(
   if (source.gradient) {
     fills.push(buildGradientPaint(source.gradient, source.box.width, source.box.height));
   }
-  if (source.backgroundImageUrl) {
-    const imagePaint = await buildImagePaint(source.backgroundImageUrl);
-    if (imagePaint) fills.push(imagePaint);
+
+  // Image is either on top of the gradient (CSS-first) or there are no
+  // gradients to defer behind. Push it last so it ends up on top.
+  if (imagePaint && (source.backgroundImageOnTop || (!source.gradient && source.extraGradients.length === 0))) {
+    fills.push(imagePaint);
   }
   (node as FrameNode).fills = fills;
 

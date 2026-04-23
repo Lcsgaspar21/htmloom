@@ -247,6 +247,15 @@ export interface CapturedNode {
   extraGradients: Gradient[];
   /** URL from `background-image: url(...)` on a non-img element; layers above gradient/solid. */
   backgroundImageUrl: string | null;
+  /**
+   * True when the CSS `background-image` lists the URL layer BEFORE any
+   * gradient layer (`background: url(noise.png), linear-gradient(...)`).
+   * Drives the paint order in the builder — first-listed CSS layer
+   * paints on top, so a true value pushes the image to the end of the
+   * fills array (Figma renders last = top). False / no gradient = image
+   * goes below the gradient stack.
+   */
+  backgroundImageOnTop: boolean;
   /** Multi-layer CSS box-shadows mapped to Figma effects. */
   shadows: Shadow[];
   /**
