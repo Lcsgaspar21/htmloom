@@ -65,6 +65,18 @@ export async function captureDocument(
   // an empty box. Borrowed pattern from @builder.io/html-to-figma.
   inlineSvgUseElements(root);
 
+  // Wait for icon fonts (Material Icons, FontAwesome, …) to load before
+  // measuring or rasterising. Without this, the canvas pass below would
+  // draw with the Inter fallback and the resulting PNG would be a
+  // box / question mark.
+  if (doc.fonts && typeof doc.fonts.ready?.then === "function") {
+    try {
+      await doc.fonts.ready;
+    } catch {
+      // Old runtimes without `document.fonts` — proceed anyway.
+    }
+  }
+
   const tree = walk(root, root, "0");
   if (!tree) throw new Error("HTMLoom: root element produced no captured node");
 
@@ -74,6 +86,12 @@ export async function captureDocument(
   // and `background-image: url(*.svg)`) into PNG data URIs so Figma's
   // `createImage` accepts them.
   await rasterizeSvgs(tree);
+
+  // Icon-font glyphs (Material Icons / FontAwesome / Lucide …) get
+  // drawn to a canvas using the loaded font and exported as PNG. The
+  // node flips from TEXT to IMAGE so Figma renders the icon instead of
+  // a Tofu glyph in the Inter fallback.
+  await rasterizeIconGlyphs(tree, doc);
 
   return {
     rootName: doc.title || "HTMLoom Import",
@@ -146,6 +164,137 @@ function classifyTokenValue(value: string): {
   }
 
   return { kind: "SKIP" };
+}
+
+/* ---------- icon-font detection + rasterisation ---------- */
+
+/**
+ * Family-name fingerprints for the common icon font families. We match
+ * any token of the computed `font-family` against this list (case- and
+ * separator-insensitive). The PUA codepoint check handles families we
+ * can't enumerate (custom icomoon builds, internal sets, …).
+ */
+const ICON_FONT_FAMILIES = [
+  "material icons",
+  "material symbols",
+  "material symbols outlined",
+  "material symbols rounded",
+  "material symbols sharp",
+  "font awesome",
+  "fontawesome",
+  "fa-solid",
+  "fa-regular",
+  "fa-brands",
+  "lucide",
+  "feather",
+  "phosphor",
+  "bootstrap-icons",
+  "bootstrap icons",
+  "remixicon",
+  "remix icon",
+  "tabler-icons",
+  "tabler icons",
+  "icomoon",
+  "octicons",
+  "eva-icons",
+  "ionicons",
+  "heroicons",
+];
+
+function isIconFontGlyph(style: CSSStyleDeclaration, characters: string): boolean {
+  const text = (characters || "").trim();
+  if (!text) return false;
+
+  // Family-name fingerprint. The browser-resolved `font-family` looks
+  // like `"Material Icons", sans-serif` — split, normalise, compare.
+  const family = (style.fontFamily || "").toLowerCase();
+  if (family) {
+    for (const needle of ICON_FONT_FAMILIES) {
+      if (family.includes(needle)) return true;
+    }
+  }
+
+  // PUA codepoint heuristic. Icon fonts pack their glyphs into the
+  // Unicode Private Use Area (U+E000..U+F8FF) so they don't collide
+  // with real letters. Even custom icomoon builds end up here. We only
+  // accept short strings — a paragraph that happens to start with a
+  // PUA char is almost certainly NOT an icon.
+  if (text.length <= 4) {
+    for (const ch of text) {
+      const cp = ch.codePointAt(0) ?? 0;
+      if (cp >= 0xe000 && cp <= 0xf8ff) return true;
+      // Supplementary PUA (some Material Symbols extended ranges).
+      if (cp >= 0xf0000 && cp <= 0xffffd) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Async post-pass: every text leaf flagged as `isIconGlyph` is drawn
+ * onto a hidden canvas using the captured font + size + colour, the
+ * canvas is exported to a 2x PNG data URI, and the node is rewritten
+ * as an `IMAGE` of the same dimensions. This survives the trip to the
+ * Figma main thread (which has no access to the icon font) and keeps
+ * the icon visible in the final import.
+ *
+ * The font is already loaded inside the iframe at this point —
+ * `captureDocument` awaits `document.fonts.ready` before walking — so
+ * `ctx.measureText` / `fillText` use the real glyphs, not Inter
+ * fallbacks.
+ */
+async function rasterizeIconGlyphs(node: CapturedNode, doc: Document): Promise<void> {
+  if (node.isIconGlyph && node.text && node.kind === "TEXT") {
+    const png = renderGlyphToPng(node, doc);
+    if (png) {
+      node.kind = "IMAGE";
+      node.imageSrc = png;
+      node.text = null;
+      node.svgMarkup = null;
+    } else {
+      // Couldn't draw — leave as text and warn so the author knows
+      // why the icon may show up as a `?` in Figma.
+      console.warn(
+        `[HTMLoom] Icon-font glyph "${node.label || node.tag}" failed to rasterise.`,
+      );
+    }
+  }
+  if (node.component) {
+    for (const variant of node.component.variants) await rasterizeIconGlyphs(variant.tree, doc);
+  }
+  for (const child of node.children) await rasterizeIconGlyphs(child, doc);
+}
+
+function renderGlyphToPng(node: CapturedNode, doc: Document): string | null {
+  if (!node.text) return null;
+  const t = node.text;
+  // 2x super-sample so the glyph is crisp at 100% zoom in Figma.
+  const SCALE = 2;
+  const width = Math.max(1, Math.ceil(node.box.width));
+  const height = Math.max(1, Math.ceil(node.box.height));
+  const canvas = doc.createElement("canvas");
+  canvas.width = width * SCALE;
+  canvas.height = height * SCALE;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  const fontSize = t.fontSize;
+  const family = t.fontFamily;
+  const weight = t.fontWeight || 400;
+  const italic = t.italic ? "italic " : "";
+  ctx.scale(SCALE, SCALE);
+  ctx.font = `${italic}${weight} ${fontSize}px "${family}"`;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  ctx.fillStyle = `rgba(${Math.round(t.color.r * 255)}, ${Math.round(t.color.g * 255)}, ${Math.round(t.color.b * 255)}, ${t.color.a})`;
+
+  try {
+    ctx.fillText(t.characters, width / 2, height / 2);
+    return canvas.toDataURL("image/png");
+  } catch (err) {
+    console.warn("[HTMLoom] glyph rasterisation failed:", err);
+    return null;
+  }
 }
 
 /* ---------- SVG rasterisation post-pass ---------- */
@@ -390,6 +539,7 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     backgroundImageUrl,
     backgroundImageOnTop,
     shadows,
+    isIconGlyph: kind === "TEXT" && textSpec ? isIconFontGlyph(style, textSpec.characters) : false,
     aspectRatio,
     children: [],
     component: componentName ? captureComponent(el, componentName, path) : null,
@@ -397,6 +547,25 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     tokenBindings: parseTokenBindings(el),
     sizing: extractSizingIntent(el, style, parent, parentStyle),
   };
+
+  // Multi-line text rescue. CSS wraps a text inside a constrained parent
+  // automatically (e.g. a long `<p>` inside a 320 px card breaks across
+  // 3 lines). Our intent inference would still mark a `<span>` /
+  // `<p style="display: inline">` as `widthMode: HUG`, which in Figma
+  // means `textAutoResize: WIDTH_AND_HEIGHT` — the text grows to its
+  // intrinsic glyph width and visibly overflows the parent. Detect the
+  // wrap by counting client rects and pin the width to what we
+  // captured so Figma re-wraps to the same column instead.
+  if (kind === "TEXT" && node.sizing.widthMode === "HUG") {
+    try {
+      const rects = el.getClientRects();
+      if (rects.length > 1) {
+        node.sizing = { ...node.sizing, widthMode: "FIXED" };
+      }
+    } catch {
+      // getClientRects unsupported on the element — leave as HUG.
+    }
+  }
 
   if (isDecoratedTextLeaf && !componentName) {
     node.children.push(synthesizeTextChild(textSpec!, path, node.tokenBindings.text));
@@ -463,6 +632,7 @@ function synthesizeTextChild(
     backgroundImageUrl: null,
     backgroundImageOnTop: false,
     shadows: [],
+    isIconGlyph: false,
     aspectRatio: null,
     children: [],
     component: null,
@@ -1806,6 +1976,7 @@ function synthesiseRowFrame(
     backgroundImageUrl: null,
     backgroundImageOnTop: false,
     shadows: [],
+    isIconGlyph: false,
     aspectRatio: null,
     children: cells,
     component: null,

@@ -259,6 +259,14 @@ export interface CapturedNode {
   /** Multi-layer CSS box-shadows mapped to Figma effects. */
   shadows: Shadow[];
   /**
+   * True when the captured text is rendered with an icon-font (Material
+   * Icons, FontAwesome, Lucide, Phosphor, …) or contains Private Use
+   * Area glyphs that won't render in Figma's Inter fallback. The async
+   * post-pass rasterises these glyphs into a PNG and flips the node to
+   * an `IMAGE` kind, so the icon survives the import.
+   */
+  isIconGlyph: boolean;
+  /**
    * CSS `aspect-ratio` value as `width / height` (e.g. 16/9 → 1.7778).
    * Mapped to Figma's `targetAspectRatio` so the frame keeps the ratio
    * when resized in either axis. `null` when not declared.

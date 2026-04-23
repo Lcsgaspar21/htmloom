@@ -413,6 +413,31 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
       overlays a textured base) and `background: url(noise.png),
       linear-gradient(...)` (textured noise on top of a gradient).
 
+## Phase 8 — Icon fonts + wrapped text rescue ✓
+
+- [x] **Icon-font glyph rasterisation**. Material Icons / FontAwesome
+      / Lucide / Phosphor / Bootstrap Icons / Remix / Tabler / Octicons
+      / Heroicons / Eva / Ionicons / Material Symbols and any custom
+      icomoon build (detected via Private Use Area codepoints) get
+      drawn onto a hidden canvas with the captured font + size +
+      colour, exported as a 2x PNG, and the node flips from `TEXT` to
+      `IMAGE`. Without this the icon rendered as a Tofu glyph in
+      Figma's Inter fallback. Capture pipeline now also awaits
+      `document.fonts.ready` before walking so the font is loaded
+      before measurement.
+- [x] **Wrapped text → FIXED width rescue**. A `<span>` /
+      `<p style="display: inline">` containing a long paragraph CSS-
+      wraps across multiple lines inside its constrained parent, but
+      our intent inference marked it as `widthMode: HUG`, which in
+      Figma promoted to `WIDTH_AND_HEIGHT` resize and let the text
+      grow to its intrinsic glyph width (visible overflow). The walker
+      now counts `el.getClientRects()` after extracting sizing intent;
+      if there's more than one rect the text actually wrapped, and
+      `widthMode` is pinned to `FIXED` at the captured box width so
+      Figma re-wraps to the same column.
+- [x] `examples/icons-and-wrap.html` — Material Icons in action rows
+      and a long paragraph inside a 480 px card.
+
 ## Phase 8 — Still on the table
 
 - [ ] `justify-self` per-grid-item alignment override (currently
