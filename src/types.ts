@@ -31,9 +31,17 @@ export interface Padding {
   left: number;
 }
 
+export type BorderLineStyle = "solid" | "dashed" | "dotted" | "double" | "none";
+
 export interface BorderSide {
   width: number;
   color: RGBA | null;
+  /**
+   * CSS `border-*-style`. Drives Figma `dashPattern`: solid → no dash,
+   * dashed → ~[w*3, w*2], dotted → ~[w, w*2]. `double` falls back to
+   * solid (Figma can't represent it). `none` zeroes the side.
+   */
+  style: BorderLineStyle;
 }
 
 export interface BorderStyle {
@@ -41,6 +49,8 @@ export interface BorderStyle {
   width: number;
   /** Dominant side colour; used when {@link sides} is null. */
   color: RGBA | null;
+  /** Dominant side line style; used when {@link sides} is null. */
+  lineStyle: BorderLineStyle;
   radius: { tl: number; tr: number; br: number; bl: number };
   /**
    * Per-side widths/colours when the four sides are not uniform. When set,

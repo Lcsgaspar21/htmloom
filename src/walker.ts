@@ -201,6 +201,43 @@ const ICON_FONT_FAMILIES = [
   "heroicons",
 ];
 
+/**
+ * Returns true when a Unicode codepoint sits inside a "graphic glyph"
+ * block — arrows, math operators, geometric shapes, dingbats, box
+ * drawing, etc. Real text never lives in these ranges, so it's safe to
+ * rasterise them whenever the parent string is short.
+ *
+ * Coverage:
+ *   U+2190..U+21FF  Arrows
+ *   U+2200..U+22FF  Mathematical Operators       (e.g. ⊘ ⋯)
+ *   U+2300..U+23FF  Miscellaneous Technical
+ *   U+2500..U+257F  Box Drawing
+ *   U+2580..U+259F  Block Elements
+ *   U+25A0..U+25FF  Geometric Shapes
+ *   U+2600..U+26FF  Miscellaneous Symbols
+ *   U+2700..U+27BF  Dingbats
+ *   U+2900..U+297F  Supplemental Arrows-B
+ *   U+2980..U+29FF  Misc Mathematical Symbols-B
+ *   U+2A00..U+2AFF  Supplemental Mathematical Operators
+ *   U+2B00..U+2BFF  Misc Symbols and Arrows       (e.g. ⬒)
+ */
+function isSymbolGlyphCodepoint(cp: number): boolean {
+  return (
+    (cp >= 0x2190 && cp <= 0x21ff) ||
+    (cp >= 0x2200 && cp <= 0x22ff) ||
+    (cp >= 0x2300 && cp <= 0x23ff) ||
+    (cp >= 0x2500 && cp <= 0x257f) ||
+    (cp >= 0x2580 && cp <= 0x259f) ||
+    (cp >= 0x25a0 && cp <= 0x25ff) ||
+    (cp >= 0x2600 && cp <= 0x26ff) ||
+    (cp >= 0x2700 && cp <= 0x27bf) ||
+    (cp >= 0x2900 && cp <= 0x297f) ||
+    (cp >= 0x2980 && cp <= 0x29ff) ||
+    (cp >= 0x2a00 && cp <= 0x2aff) ||
+    (cp >= 0x2b00 && cp <= 0x2bff)
+  );
+}
+
 function isIconFontGlyph(style: CSSStyleDeclaration, characters: string): boolean {
   const text = (characters || "").trim();
   if (!text) return false;
@@ -214,18 +251,39 @@ function isIconFontGlyph(style: CSSStyleDeclaration, characters: string): boolea
     }
   }
 
-  // PUA codepoint heuristic. Icon fonts pack their glyphs into the
-  // Unicode Private Use Area (U+E000..U+F8FF) so they don't collide
-  // with real letters. Even custom icomoon builds end up here. We only
-  // accept short strings — a paragraph that happens to start with a
-  // PUA char is almost certainly NOT an icon.
+  // Short strings (≤ 4 chars) where every codepoint sits in a known
+  // glyph-only block: rasterise them. Without this, dingbats / shapes
+  // / arrows / box-drawing characters used as ad-hoc icon buttons
+  // (e.g. `<button>⬒</button>`) render as Tofu in Figma because Inter
+  // doesn't ship those glyphs.
   if (text.length <= 4) {
+    let allSymbolic = true;
+    let anyGlyphLike = false;
     for (const ch of text) {
       const cp = ch.codePointAt(0) ?? 0;
-      if (cp >= 0xe000 && cp <= 0xf8ff) return true;
-      // Supplementary PUA (some Material Symbols extended ranges).
-      if (cp >= 0xf0000 && cp <= 0xffffd) return true;
+      // PUA — icon-font payload (Material / FontAwesome compiled glyphs).
+      if (cp >= 0xe000 && cp <= 0xf8ff) {
+        anyGlyphLike = true;
+        continue;
+      }
+      // Supplementary PUA (Material Symbols extended ranges).
+      if (cp >= 0xf0000 && cp <= 0xffffd) {
+        anyGlyphLike = true;
+        continue;
+      }
+      // Symbol-block character — risky to rasterise unless EVERY char
+      // in the string is glyph-like (otherwise we'd burn real text into
+      // a bitmap and lose editability).
+      if (isSymbolGlyphCodepoint(cp)) {
+        anyGlyphLike = true;
+        continue;
+      }
+      // Plain whitespace doesn't disqualify an otherwise-symbolic run.
+      if (ch === " " || ch === "\t") continue;
+      allSymbolic = false;
+      break;
     }
+    if (anyGlyphLike && allSymbolic) return true;
   }
   return false;
 }
@@ -521,6 +579,7 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     border: {
       width: borderInfo.width,
       color: borderInfo.color,
+      lineStyle: borderInfo.lineStyle,
       radius: {
         tl: parsePx(style.borderTopLeftRadius),
         tr: parsePx(style.borderTopRightRadius),
@@ -621,7 +680,7 @@ function synthesizeTextChild(
     box: { x: 0, y: 0, width: 0, height: 0 },
     padding: { top: 0, right: 0, bottom: 0, left: 0 },
     background: null,
-    border: { width: 0, color: null, radius: { tl: 0, tr: 0, br: 0, bl: 0 }, sides: null },
+    border: { width: 0, color: null, lineStyle: "solid", radius: { tl: 0, tr: 0, br: 0, bl: 0 }, sides: null },
     opacity: 1,
     layout: { mode: "NONE", primary: "MIN", cross: "MIN", itemSpacing: 0, alignContent: "AUTO", confidence: 0 },
     text,
@@ -931,20 +990,31 @@ function parsePadding(s: CSSStyleDeclaration): Padding {
 function parseBorder(s: CSSStyleDeclaration): {
   width: number;
   color: RGBA | null;
+  lineStyle: import("./types").BorderLineStyle;
   sides: BorderStyle["sides"];
 } {
+  const normaliseStyle = (raw: string): import("./types").BorderLineStyle => {
+    const v = (raw || "").trim().toLowerCase();
+    if (v === "dashed") return "dashed";
+    if (v === "dotted") return "dotted";
+    if (v === "double") return "double";
+    if (v === "none" || v === "hidden") return "none";
+    return "solid";
+  };
+
   const sideOf = (
     widthProp: string,
     colorProp: string,
     styleProp: string,
   ): BorderSide => {
-    const styleVal = s.getPropertyValue(styleProp);
-    if (styleVal === "none" || styleVal === "hidden") {
-      return { width: 0, color: null };
+    const lineStyle = normaliseStyle(s.getPropertyValue(styleProp));
+    if (lineStyle === "none") {
+      return { width: 0, color: null, style: "none" };
     }
     return {
       width: parsePx(s.getPropertyValue(widthProp)),
       color: parseColor(s.getPropertyValue(colorProp)),
+      style: lineStyle,
     };
   };
   const top = sideOf("border-top-width", "border-top-color", "border-top-style");
@@ -955,7 +1025,7 @@ function parseBorder(s: CSSStyleDeclaration): {
   const widths = [top.width, right.width, bottom.width, left.width];
   const maxWidth = Math.max(...widths);
   if (maxWidth === 0) {
-    return { width: 0, color: null, sides: null };
+    return { width: 0, color: null, lineStyle: "solid", sides: null };
   }
 
   // Find a representative side (the first one with non-zero width) to use
@@ -963,23 +1033,36 @@ function parseBorder(s: CSSStyleDeclaration): {
   const dominant =
     [top, right, bottom, left].find((s) => s.width > 0) ?? top;
 
-  // Uniform when all four sides share width AND colour. Use a tight
-  // colour-equality check so a `border: 1px solid red` doesn't degrade
-  // into the per-side path because of a stray `border-bottom-color`.
+  // Uniform when all four sides share width AND colour AND line style.
+  // The line-style equality is critical: `border: 1px dashed` round-trips
+  // through `getComputedStyle()` as four `dashed` sides; if any side
+  // disagrees we fall back to per-side painting so each rectangle can
+  // carry its own dash pattern.
   const allSameWidth = widths.every((w) => Math.abs(w - dominant.width) < 0.01);
   const allSameColor =
     rgbaEquals(top.color, dominant.color) &&
     rgbaEquals(right.color, dominant.color) &&
     rgbaEquals(bottom.color, dominant.color) &&
     rgbaEquals(left.color, dominant.color);
+  const allSameStyle =
+    top.style === dominant.style &&
+    right.style === dominant.style &&
+    bottom.style === dominant.style &&
+    left.style === dominant.style;
 
-  if (allSameWidth && allSameColor) {
-    return { width: dominant.width, color: dominant.color, sides: null };
+  if (allSameWidth && allSameColor && allSameStyle) {
+    return {
+      width: dominant.width,
+      color: dominant.color,
+      lineStyle: dominant.style,
+      sides: null,
+    };
   }
 
   return {
     width: dominant.width,
     color: dominant.color,
+    lineStyle: dominant.style,
     sides: { top, right, bottom, left },
   };
 }
@@ -1958,7 +2041,7 @@ function synthesiseRowFrame(
     box: { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
     padding: { top: 0, right: 0, bottom: 0, left: 0 },
     background: null,
-    border: { width: 0, color: null, radius: { tl: 0, tr: 0, br: 0, bl: 0 }, sides: null },
+    border: { width: 0, color: null, lineStyle: "solid", radius: { tl: 0, tr: 0, br: 0, bl: 0 }, sides: null },
     opacity: 1,
     layout: {
       mode: "HORIZONTAL",
@@ -2221,7 +2304,11 @@ function inferAxisMode(
   // both edges and a stretching parent.
   if (position === "absolute" || position === "fixed") return "FIXED";
 
-  // Inline-level elements size to content on both axes.
+  // Inline-level elements size to content on both axes — UNLESS the
+  // author pinned an explicit width/height (e.g. a 14×14 circular badge
+  // built with `display: inline-flex; width: 14px; height: 14px`). The
+  // pre-fix returned HUG unconditionally, which made the badge collapse
+  // to its text bbox and lose the circle.
   if (
     display === "inline" ||
     display === "inline-block" ||
@@ -2229,6 +2316,7 @@ function inferAxisMode(
     display === "inline-grid" ||
     display === "contents"
   ) {
+    if (axisHasExplicitSize(style, axis)) return "FIXED";
     return "HUG";
   }
 

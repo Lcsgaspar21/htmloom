@@ -299,6 +299,26 @@ async function buildFrame(
  * Skipped (returns silently) when the captured border is uniform — that
  * path is handled by `applyVisuals` with a single Figma stroke.
  */
+/**
+ * CSS `border-style` → Figma `dashPattern`. Returns `null` for `solid`
+ * / `double` / `none` (caller leaves the stroke unmodified).
+ *
+ * Dash sizing is anchored to the stroke weight: dotted ≈ square dots
+ * (w × 2w), dashed ≈ short bars (3w × 2w). These match Chromium's
+ * default rendering closely enough that the icon-line wireframes
+ * (e.g. our Layout B "dots are the trigger" underline) read the same
+ * in Figma.
+ */
+function dashPatternForStyle(
+  lineStyle: import("./types").BorderLineStyle,
+  weight: number,
+): number[] | null {
+  const w = Math.max(0.5, weight);
+  if (lineStyle === "dotted") return [w, w * 2];
+  if (lineStyle === "dashed") return [w * 3, w * 2];
+  return null;
+}
+
 function appendPerSideBorders(
   frame: FrameNode,
   source: CapturedNode,
@@ -312,6 +332,11 @@ function appendPerSideBorders(
   const H = frame.height;
   const colorBinding = source.tokenBindings.border;
 
+  // Solid edges paint as a 1-px-tall filled rectangle; dashed/dotted
+  // edges need a stroke (so we can apply `dashPattern`) on a thin
+  // rectangle whose stroke geometry approximates the line. Vertical
+  // edges flip the dash axis automatically because the rect is taller
+  // than wide.
   const make = (
     name: string,
     side: BorderSide,
@@ -319,6 +344,35 @@ function appendPerSideBorders(
     constraints: Constraints,
   ): void => {
     if (side.width <= 0 || !side.color) return;
+    const dash = dashPatternForStyle(side.style, side.width);
+
+    if (dash) {
+      // Dashed/dotted: paint as a stroked, transparent rectangle so
+      // Figma's stroke renderer applies the dash pattern. Centre-align
+      // so the dashes sit on the captured edge and don't shift the
+      // visual edge by half the stroke weight.
+      const r = figma.createRectangle();
+      r.name = name;
+      r.resize(Math.max(0.5, rect.w), Math.max(0.5, rect.h));
+      r.fills = [];
+      r.strokes = [bindSolid(side.color, ctx, colorBinding)];
+      r.strokeWeight = side.width;
+      r.strokeAlign = "CENTER";
+      try {
+        (r as unknown as { dashPattern: number[] }).dashPattern = dash;
+      } catch {
+        // older Figma APIs — degrade to solid silently.
+      }
+      frame.appendChild(r);
+      if (useAutoLayout && "layoutPositioning" in r) {
+        (r as unknown as { layoutPositioning: "AUTO" | "ABSOLUTE" }).layoutPositioning = "ABSOLUTE";
+      }
+      r.x = rect.x;
+      r.y = rect.y;
+      r.constraints = constraints;
+      return;
+    }
+
     const r = figma.createRectangle();
     r.name = name;
     r.resize(Math.max(0.5, rect.w), Math.max(0.5, rect.h));
@@ -933,6 +987,14 @@ async function applyVisuals(
       bindSolid(source.border.color, ctx, source.tokenBindings.border),
     ];
     (node as FrameNode).strokeWeight = source.border.width;
+    const dash = dashPatternForStyle(source.border.lineStyle, source.border.width);
+    if (dash && "dashPattern" in node) {
+      try {
+        (node as unknown as { dashPattern: number[] }).dashPattern = dash;
+      } catch {
+        // older Figma APIs / read-only nodes — silently fall back to solid.
+      }
+    }
   }
 
   if (source.shadows.length > 0) {
