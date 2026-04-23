@@ -383,8 +383,20 @@ export type UiToMain =
   | { type: "log"; level: "info" | "warn" | "error"; message: string }
   | { type: "cancel" };
 
+/**
+ * Summary of what was emitted during an import. Powers the post-import
+ * UI hint so authors discover features they enabled (variants need
+ * prototype mode to test, tokens land in a Variables collection, etc.).
+ */
+export interface ImportStats {
+  reactionCount: number;
+  componentSetCount: number;
+  componentCount: number;
+  variableCount: number;
+}
+
 /** Messages flowing main -> UI. */
 export type MainToUi =
   | { type: "init" }
-  | { type: "import-complete"; nodeId: string }
+  | { type: "import-complete"; nodeId: string; stats: ImportStats }
   | { type: "import-error"; message: string };

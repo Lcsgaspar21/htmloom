@@ -32,8 +32,8 @@ figma.ui.onmessage = async (msg: UiToMain) => {
 
     case "import":
       try {
-        const root = await buildFromCapture(msg.payload);
-        send({ type: "import-complete", nodeId: root.id });
+        const { root, stats } = await buildFromCapture(msg.payload);
+        send({ type: "import-complete", nodeId: root.id, stats });
         figma.notify(`HTMLoom: imported "${root.name}"`);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

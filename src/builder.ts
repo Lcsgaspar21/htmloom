@@ -55,18 +55,33 @@ interface BuildContext {
    * Built once per import so subsequent fills reuse the same Variables.
    */
   tokens: TokenIndex;
+  /**
+   * Counters surfaced back to the UI in `import-complete`. Drives the
+   * post-import hint (e.g. "X reactions emitted — open prototype mode
+   * to test"), so authors discover invisible features without digging
+   * through Figma's panels.
+   */
+  stats: {
+    reactionCount: number;
+    componentSetCount: number;
+    componentCount: number;
+  };
 }
 
-export async function buildFromCapture(capture: CaptureResult): Promise<SceneNode> {
+export async function buildFromCapture(
+  capture: CaptureResult,
+): Promise<{ root: SceneNode; stats: { reactionCount: number; componentSetCount: number; componentCount: number; variableCount: number } }> {
   await figma.loadFontAsync(FALLBACK_FONT);
   loadedFonts.add(fontKey(FALLBACK_FONT));
 
   await preloadFonts(capture.tree);
 
+  const tokens = await buildTokenIndex(capture.tokens);
   const ctx: BuildContext = {
     nodeIdMap: new Map(),
     variantSets: new Map(),
-    tokens: await buildTokenIndex(capture.tokens),
+    tokens,
+    stats: { reactionCount: 0, componentSetCount: 0, componentCount: 0 },
   };
 
   const root = await createNodeFor(capture.tree, true, ctx);
@@ -86,7 +101,15 @@ export async function buildFromCapture(capture: CaptureResult): Promise<SceneNod
   figma.currentPage.appendChild(root);
   figma.currentPage.selection = [root];
   figma.viewport.scrollAndZoomIntoView([root]);
-  return root;
+  return {
+    root,
+    stats: {
+      reactionCount: ctx.stats.reactionCount,
+      componentSetCount: ctx.stats.componentSetCount,
+      componentCount: ctx.stats.componentCount,
+      variableCount: tokens.byName.size,
+    },
+  };
 }
 
 async function preloadFonts(node: CapturedNode): Promise<void> {
@@ -528,6 +551,7 @@ async function buildComponentSet(
   // missing targets, which is the correct behaviour here.
   if (components.length === 1) {
     components[0].name = spec.name;
+    ctx.stats.componentCount += 1;
     return components[0];
   }
 
@@ -536,6 +560,7 @@ async function buildComponentSet(
   }
   const set = figma.combineAsVariants(components, figma.currentPage);
   set.name = spec.name;
+  ctx.stats.componentSetCount += 1;
   return set;
 }
 
@@ -588,6 +613,7 @@ async function applyReactions(
     await (sceneNode as SceneNode & {
       setReactionsAsync: (r: Reaction[]) => Promise<void>;
     }).setReactionsAsync(reactions);
+    ctx.stats.reactionCount += reactions.length;
   }
 }
 

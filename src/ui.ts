@@ -5,7 +5,7 @@
  */
 
 import { captureDocument } from "./walker";
-import type { CaptureResult, MainToUi, UiToMain } from "./types";
+import type { CaptureResult, ImportStats, MainToUi, UiToMain } from "./types";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -112,6 +112,34 @@ function countNodes(node: { children: unknown[] }): number {
   return n;
 }
 
+/**
+ * Builds the post-import status line. The base "Imported!" message is
+ * extended with per-feature hints that point the author at the Figma
+ * surface where their authored work lives — variants land in the
+ * Component panel, reactions only fire in prototype mode, and tokens
+ * are buried under a Variables collection. Without these hints users
+ * routinely ask "where did my prototype go?".
+ */
+function buildImportSummary(stats: ImportStats): string {
+  const parts: string[] = ["Imported! Check your Figma canvas."];
+  if (stats.componentSetCount > 0 || stats.componentCount > 0) {
+    const total = stats.componentSetCount + stats.componentCount;
+    const label = total === 1 ? "component" : "components";
+    parts.push(`${total} ${label} created.`);
+  }
+  if (stats.reactionCount > 0) {
+    const r = stats.reactionCount;
+    const noun = r === 1 ? "reaction" : "reactions";
+    parts.push(`${r} ${noun} wired — switch to Prototype mode (top-right toolbar) and press ▶ to test.`);
+  }
+  if (stats.variableCount > 0) {
+    const v = stats.variableCount;
+    const noun = v === 1 ? "Variable" : "Variables";
+    parts.push(`${v} ${noun} synced under "HTMLoom Tokens".`);
+  }
+  return parts.join(" ");
+}
+
 window.addEventListener("message", (event) => {
   const msg = event.data?.pluginMessage as MainToUi | undefined;
   if (!msg) return;
@@ -120,7 +148,7 @@ window.addEventListener("message", (event) => {
       send({ type: "ready" });
       return;
     case "import-complete":
-      setStatus("Imported! Check your Figma canvas.", "ok");
+      setStatus(buildImportSummary(msg.stats), "ok");
       importBtn.disabled = false;
       return;
     case "import-error":
