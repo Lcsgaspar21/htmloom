@@ -1537,6 +1537,14 @@ function restructureMultiTrackGrid(node: CapturedNode, style: CSSStyleDeclaratio
   const rows = bucketIntoRows(node.children);
   if (rows.length < 2) return;
 
+  // Row-span detection: a `grid-row: span 2` cell extends past the start
+  // of the next visual row by more than the row gap. Restructuring would
+  // collapse it into one row and distort heights, so we bail and let the
+  // absolute-positioning fallback render the grid as captured. Authors
+  // who need both auto-layout AND row spans should split the spanning
+  // cell out of the grid.
+  if (hasRowSpanningCells(rows, rowGap)) return;
+
   const trackWidths = (style.gridTemplateColumns || "")
     .split(/\s+/)
     .map(parsePx)
@@ -1545,8 +1553,15 @@ function restructureMultiTrackGrid(node: CapturedNode, style: CSSStyleDeclaratio
     trackWidths.length >= 2 &&
     trackWidths.every((w) => Math.abs(w - trackWidths[0]) <= 1);
 
+  // Column-span inference: when the resolved tracks are equal-width, a
+  // cell whose width covers ~N tracks (plus N-1 gaps) becomes a span-N
+  // cell. We translate that to `flexGrow=N` on the row's horizontal
+  // auto-layout so the cell occupies the right fraction when the grid
+  // reflows. Detected per row to keep the math local.
+  const trackUnit = equalTracks && trackWidths.length > 0 ? trackWidths[0] : null;
+
   const synthesised: CapturedNode[] = rows.map((cells, rIdx) =>
-    synthesiseRowFrame(cells, node.id, rIdx, colGap, equalTracks),
+    synthesiseRowFrame(cells, node.id, rIdx, colGap, equalTracks, trackUnit),
   );
   node.children = synthesised;
   node.layout = {
@@ -1556,6 +1571,39 @@ function restructureMultiTrackGrid(node: CapturedNode, style: CSSStyleDeclaratio
     itemSpacing: rowGap,
     confidence: 0.9,
   };
+}
+
+/**
+ * Returns true when any row contains a cell whose bottom edge sits past
+ * the next row's top minus the row gap — the geometric fingerprint of a
+ * `grid-row: span N` cell.
+ */
+/**
+ * Estimates `grid-column: span N` from a captured cell width. With
+ * equal-track grids (`1fr 1fr 1fr`) the resolved width is approximately
+ * `N × trackUnit + (N - 1) × colGap`. We round to the nearest integer
+ * and clamp at 1, so a single-track cell stays at span 1 and a wider
+ * cell gets the proportional `flexGrow` it needs to occupy the right
+ * share of the row.
+ */
+function estimateColumnSpan(cellWidth: number, trackUnit: number, colGap: number): number {
+  if (trackUnit <= 0 || cellWidth <= 0) return 1;
+  const denom = trackUnit + colGap;
+  if (denom <= 0) return 1;
+  const raw = (cellWidth + colGap) / denom;
+  return Math.max(1, Math.round(raw));
+}
+
+function hasRowSpanningCells(rows: CapturedNode[][], rowGap: number): boolean {
+  for (let i = 0; i < rows.length - 1; i++) {
+    const nextRowTop = Math.min(...rows[i + 1].map((c) => c.box.y));
+    const tolerance = Math.max(2, rowGap);
+    for (const cell of rows[i]) {
+      const bottom = cell.box.y + cell.box.height;
+      if (bottom > nextRowTop + tolerance) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -1602,6 +1650,7 @@ function synthesiseRowFrame(
   rowIndex: number,
   itemSpacing: number,
   equalTracks: boolean,
+  trackUnit: number | null,
 ): CapturedNode {
   const minX = Math.min(...cells.map((c) => c.box.x));
   const minY = Math.min(...cells.map((c) => c.box.y));
@@ -1615,11 +1664,14 @@ function synthesiseRowFrame(
     cell.box.y -= minY;
     if (equalTracks) {
       // Equal grid tracks (`1fr 1fr 1fr`-style) → make every cell FILL the
-      // row equally so the layout reflows on resize.
+      // row equally so the layout reflows on resize. Column-spanning
+      // cells get a proportional `flexGrow` so a `grid-column: span 2`
+      // cell takes twice the share of a 1-track sibling.
+      const span = trackUnit ? estimateColumnSpan(cell.box.width, trackUnit, itemSpacing) : 1;
       cell.sizing = {
         ...cell.sizing,
         widthMode: "FILL",
-        flexGrow: cell.sizing.flexGrow > 0 ? cell.sizing.flexGrow : 1,
+        flexGrow: cell.sizing.flexGrow > 0 ? cell.sizing.flexGrow : span,
       };
     }
   }

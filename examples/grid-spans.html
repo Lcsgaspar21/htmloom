@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>HTMLoom — Grid spanning cells</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --line: #334155;
+      --ink-100: #f1f5f9;
+      --ink-300: #cbd5e1;
+      --brand: #3b82f6;
+      --warn: #f59e0b;
+      --good: #10b981;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px;
+      font: 14px/1.5 system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink-100);
+    }
+    h1 { font-size: 18px; margin: 0 0 16px; }
+
+    /* CASE A — column spanning. Equal-track 4-col grid where the hero
+       cell takes 2 columns. After import, Figma shows the hero with
+       `flexGrow=2` so it keeps a 2:1:1 ratio against the small siblings. */
+    .grid-cols {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 32px;
+    }
+    .cell {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      min-height: 88px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      color: var(--ink-300);
+    }
+    .cell.hero {
+      grid-column: span 2;
+      background: linear-gradient(135deg, var(--brand), #8b5cf6);
+      color: var(--ink-100);
+      font-weight: 600;
+    }
+    .cell.wide {
+      grid-column: span 3;
+      background: var(--warn);
+      color: #1f1300;
+      font-weight: 600;
+    }
+
+    /* CASE B — row + column spans. We document the limit: row spans
+       cause us to bail out of the grid restructure (geometric fingerprint
+       detected → fall back to absolute positioning). The result still
+       imports, just without auto-layout reflow. */
+    .grid-rows {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      grid-auto-rows: 80px;
+      gap: 12px;
+    }
+    .feature {
+      grid-row: span 2;
+      grid-column: span 1;
+      background: var(--good);
+      color: #062a1c;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <h1>Grid spanning cells</h1>
+
+  <h2 style="font-size: 13px; opacity: 0.6; margin-bottom: 8px;">A — column spans (auto-layout reflows)</h2>
+  <div class="grid-cols">
+    <div class="cell hero">Hero · span 2</div>
+    <div class="cell">3</div>
+    <div class="cell">4</div>
+    <div class="cell">5</div>
+    <div class="cell wide">Wide · span 3</div>
+  </div>
+
+  <h2 style="font-size: 13px; opacity: 0.6; margin-bottom: 8px;">B — row + column spans (absolute fallback)</h2>
+  <div class="grid-rows">
+    <div class="cell feature">Feature · row span 2</div>
+    <div class="cell">b</div>
+    <div class="cell">c</div>
+    <div class="cell">d</div>
+    <div class="cell">e</div>
+  </div>
+</body>
+</html>

@@ -351,6 +351,35 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
       overlay over linear gradient, animated reveal with `easeOutExpo`
       and `Material standard` cubic-bezier curves.
 
+## Phase 8 — Grid spanning cells ✓
+
+- [x] **Column-span inference for equal-track grids**. When a child cell
+      is wider than the resolved track unit, we estimate `span N` from
+      its captured width and emit `flexGrow=N` on the row's horizontal
+      auto-layout. A `grid-column: span 2` cell sitting in a 4-track
+      grid gets `flexGrow=2` and keeps a 2:1:1:1 ratio against its
+      single-track siblings as the parent reflows.
+- [x] **Row-span detection → graceful bail**. A cell whose bottom edge
+      crosses the next row's top by more than `row-gap` is the
+      geometric fingerprint of `grid-row: span N`. We detect this and
+      skip the grid restructure entirely so the absolute-positioning
+      fallback renders the captured layout faithfully (auto-layout
+      reflow won't work for these grids, but no distortion either).
+- [x] `examples/grid-spans.html` — equal-track 4-col grid with
+      `grid-column: span 2 / 3` cells and a 3-col grid containing a
+      `grid-row: span 2` feature card.
+
+## Phase 8 — UX polish ✓
+
+- [x] **Post-import status summary**. The "Imported!" toast now lists
+      what was created and points the author at the surface where their
+      work lives: `X components`, `X reactions wired — switch to
+      Prototype mode (top-right toolbar) and press ▶ to test`,
+      `X Variables synced under "HTMLoom Tokens"`. Fixes the
+      discoverability gap that left authors thinking the prototype
+      reactions weren't applied (they were — they just live behind
+      Figma's prototype-mode toggle).
+
 ## Phase 8 — Still on the table
 
 - [ ] Multi-image `background` stacks for `gradient + url(...)` combos
@@ -358,7 +387,8 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
 - [ ] SVG `currentColor` resolution from stylesheet selectors (currently
       only attribute / inline-style references are rewritten).
 - [ ] `align-content`, `justify-self`, `place-items` longhands.
-- [ ] Grid spanning cells (`grid-row: span N`, `grid-column: span N`).
+- [ ] Promote row-spanning cells to absolute children of the grid frame
+      (instead of bailing out of restructure entirely).
 
 ## Phase 1 limits exposed by Phase 2 testing
 
