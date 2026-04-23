@@ -66,6 +66,13 @@ export interface AutoLayoutHint {
   primary: PrimaryAxisAlign;
   cross: CrossAxisAlign;
   itemSpacing: number;
+  /**
+   * Maps to Figma's `counterAxisAlignContent` — only meaningful when the
+   * container wraps. CSS `align-content: space-between/around/evenly`
+   * promotes to `SPACE_BETWEEN`; everything else stays AUTO so Figma
+   * uses the default (single-row) behaviour.
+   */
+  alignContent: "AUTO" | "SPACE_BETWEEN";
   /** 0..1; below 0.6 we prefer absolute positioning. */
   confidence: number;
 }

@@ -448,7 +448,7 @@ function synthesizeTextChild(
     background: null,
     border: { width: 0, color: null, radius: { tl: 0, tr: 0, br: 0, bl: 0 }, sides: null },
     opacity: 1,
-    layout: { mode: "NONE", primary: "MIN", cross: "MIN", itemSpacing: 0, confidence: 0 },
+    layout: { mode: "NONE", primary: "MIN", cross: "MIN", itemSpacing: 0, alignContent: "AUTO", confidence: 0 },
     text,
     imageSrc: null,
     svgMarkup: null,
@@ -504,6 +504,7 @@ function decideLayout(
     primary: align === "center" ? "CENTER" : align === "right" ? "MAX" : "MIN",
     cross: "CENTER",
     itemSpacing: 0,
+    alignContent: "AUTO",
     confidence: 0.85,
   };
 }
@@ -1402,38 +1403,90 @@ function serializeInlineSvg(el: HTMLElement): string | null {
     }
   }
 
-  substituteCurrentColor(cloned, resolvedColor);
+  substituteCurrentColor(el, cloned, resolvedColor);
   return new XMLSerializer().serializeToString(cloned);
 }
 
 /**
- * Walks an SVG subtree and rewrites every `currentColor` reference (in the
- * common paint attributes) to the supplied concrete colour. Doesn't touch
- * inline `style="..."` declarations or stylesheet-driven colours — those
- * remain a known limitation.
+ * Walks the live and cloned SVG trees in parallel and rewrites paint
+ * references to concrete colours so the rasterised / re-imported SVG
+ * keeps its on-screen colours after leaving the document. Three layers
+ * of resolution, in priority order:
+ *
+ *  1. Attribute / inline-style mentions of `currentColor` → swap with
+ *     the supplied resolved `color`.
+ *  2. Stylesheet-driven paint: when the live element's
+ *     `getComputedStyle().fill` (or stroke / stop-color, etc.) resolves
+ *     to a real colour but the cloned element has neither an attribute
+ *     nor an inline-style override, we promote the computed value onto
+ *     the clone as an attribute. This bridges the previously-known gap
+ *     where `<style>.icon path { fill: currentColor }` was lost on
+ *     serialisation because the rule lives in a stylesheet, not on the
+ *     element.
+ *  3. The two trees are walked in lockstep (`Array.from(children)`
+ *     keeps order on both sides) — clones are isomorphic to their
+ *     source so element[i] in clone matches element[i] in live.
  */
-function substituteCurrentColor(el: Element, color: string): void {
-  const PAINT_ATTRS = [
+function substituteCurrentColor(live: Element, clone: Element, color: string): void {
+  const PAINT_ATTRS: Array<keyof CSSStyleDeclaration & string> = [
     "fill",
     "stroke",
     "color",
-    "stop-color",
-    "flood-color",
-    "lighting-color",
+    "stopColor",
+    "floodColor",
+    "lightingColor",
   ];
-  for (const attr of PAINT_ATTRS) {
-    const value = el.getAttribute(attr);
+  const ATTR_NAME: Record<string, string> = {
+    fill: "fill",
+    stroke: "stroke",
+    color: "color",
+    stopColor: "stop-color",
+    floodColor: "flood-color",
+    lightingColor: "lighting-color",
+  };
+
+  // 1) Inline `currentColor` rewrites on the clone.
+  for (const cssKey of PAINT_ATTRS) {
+    const attr = ATTR_NAME[cssKey];
+    const value = clone.getAttribute(attr);
     if (value && /^currentcolor$/i.test(value.trim())) {
-      el.setAttribute(attr, color);
+      clone.setAttribute(attr, color);
     }
   }
-  // `style="fill: currentColor"` — handle the inline-style case too.
-  const inline = el.getAttribute("style");
+  const inline = clone.getAttribute("style");
   if (inline && /currentcolor/i.test(inline)) {
-    el.setAttribute("style", inline.replace(/currentcolor/gi, color));
+    clone.setAttribute("style", inline.replace(/currentcolor/gi, color));
   }
-  for (const child of Array.from(el.children)) {
-    substituteCurrentColor(child, color);
+
+  // 2) Stylesheet-driven paint. Only act when the clone has no explicit
+  //    override for the attribute (otherwise we'd clobber author intent).
+  //    Live computed styles already resolve `currentColor` to the
+  //    rendered RGBA, so this captures stylesheet-authored values too.
+  if (live instanceof SVGElement || live instanceof HTMLElement) {
+    const liveStyle = window.getComputedStyle(live);
+    for (const cssKey of PAINT_ATTRS) {
+      const attr = ATTR_NAME[cssKey];
+      if (clone.hasAttribute(attr)) continue;
+      const inlineHasIt = inline && new RegExp(`(^|;)\\s*${attr}\\s*:`, "i").test(inline);
+      if (inlineHasIt) continue;
+      const computed = (liveStyle as unknown as Record<string, string>)[cssKey];
+      if (!computed || computed === "none") continue;
+      const normalised = computed.trim();
+      // SVG defaults: fill defaults to black, stroke to "none". We only
+      // forward values that the author clearly opted into — skip default
+      // black fill on root <svg> to avoid filling backgrounds, but keep
+      // it on shapes that explicitly inherited from a CSS rule.
+      if (normalised === "rgba(0, 0, 0, 0)") continue;
+      clone.setAttribute(attr, normalised);
+    }
+  }
+
+  // 3) Recurse in parallel.
+  const liveChildren = Array.from(live.children);
+  const cloneChildren = Array.from(clone.children);
+  const len = Math.min(liveChildren.length, cloneChildren.length);
+  for (let i = 0; i < len; i++) {
+    substituteCurrentColor(liveChildren[i], cloneChildren[i], color);
   }
 }
 
@@ -1450,6 +1503,7 @@ function detectAutoLayout(el: HTMLElement, s: CSSStyleDeclaration): AutoLayoutHi
     primary: "MIN",
     cross: "MIN",
     itemSpacing: 0,
+    alignContent: "AUTO",
     confidence: 0,
   };
 
@@ -1461,6 +1515,7 @@ function detectAutoLayout(el: HTMLElement, s: CSSStyleDeclaration): AutoLayoutHi
       primary: mapJustify(s.justifyContent),
       cross: mapAlign(s.alignItems),
       itemSpacing: parsePx(s.rowGap) || parsePx(s.columnGap) || parsePx(s.gap),
+      alignContent: mapAlignContent(s.alignContent),
       confidence: 0.9,
     };
   }
@@ -1474,12 +1529,28 @@ function detectAutoLayout(el: HTMLElement, s: CSSStyleDeclaration): AutoLayoutHi
         primary: "MIN",
         cross: "MIN",
         itemSpacing: parsePx(s.rowGap) || parsePx(s.columnGap) || parsePx(s.gap),
+        alignContent: mapAlignContent(s.alignContent),
         confidence: 0.65,
       };
     }
   }
 
   return def;
+}
+
+/**
+ * Maps CSS `align-content` to Figma's two-value `counterAxisAlignContent`.
+ * Only the "spread the rows" family promotes to SPACE_BETWEEN; the rest
+ * (start/end/center/stretch) keeps the default packed behaviour because
+ * Figma can't model them per-row.
+ */
+function mapAlignContent(value: string | null | undefined): "AUTO" | "SPACE_BETWEEN" {
+  if (!value) return "AUTO";
+  const v = value.trim().toLowerCase();
+  if (v === "space-between" || v === "space-around" || v === "space-evenly") {
+    return "SPACE_BETWEEN";
+  }
+  return "AUTO";
 }
 
 function mapJustify(v: string): AutoLayoutHint["primary"] {
@@ -1569,6 +1640,7 @@ function restructureMultiTrackGrid(node: CapturedNode, style: CSSStyleDeclaratio
     primary: "MIN",
     cross: "MIN",
     itemSpacing: rowGap,
+    alignContent: mapAlignContent(style.alignContent),
     confidence: 0.9,
   };
 }
@@ -1691,6 +1763,7 @@ function synthesiseRowFrame(
       primary: "MIN",
       cross: "MIN",
       itemSpacing,
+      alignContent: "AUTO",
       confidence: 0.9,
     },
     text: null,
@@ -1784,6 +1857,7 @@ function maybePromoteBlockStack(node: CapturedNode, style: CSSStyleDeclaration):
     primary: "MIN",
     cross: "MIN",
     itemSpacing,
+    alignContent: "AUTO",
     confidence: 0.7,
   };
 }

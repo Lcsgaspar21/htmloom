@@ -212,6 +212,22 @@ async function buildFrame(
         // Older Figma runtimes ignore layoutWrap — silently skip.
       }
     }
+    // CSS `align-content: space-between/around/evenly` on a wrapping
+    // flex container distributes the wrapped rows across the cross
+    // axis. Figma exposes the same idea via `counterAxisAlignContent`,
+    // limited to AUTO | SPACE_BETWEEN — only emit SPACE_BETWEEN when
+    // the container actually wraps, otherwise the field is ignored.
+    if (
+      node.layout.alignContent === "SPACE_BETWEEN" &&
+      node.sizing.flexWrap &&
+      node.layout.mode === "HORIZONTAL"
+    ) {
+      try {
+        (frame as unknown as { counterAxisAlignContent: "AUTO" | "SPACE_BETWEEN" }).counterAxisAlignContent = "SPACE_BETWEEN";
+      } catch {
+        // Field absent on older runtimes — silently skip.
+      }
+    }
   }
 
   applyMinMax(frame, node.sizing);

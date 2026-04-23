@@ -380,13 +380,32 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
       reactions weren't applied (they were — they just live behind
       Figma's prototype-mode toggle).
 
+## Phase 8 — `align-content` + stylesheet `currentColor` ✓
+
+- [x] **`align-content` → `counterAxisAlignContent`**. CSS
+      `align-content: space-between/around/evenly` on a wrapping flex
+      container now promotes to Figma's SPACE_BETWEEN distribution
+      so the wrapped rows spread across the cross axis. Other values
+      (start/end/center/stretch) keep AUTO since Figma can't model them
+      per-row. Captured by `mapAlignContent` and threaded through the
+      `AutoLayoutHint`.
+- [x] **`place-items` shorthand**. Comes for free — computed styles
+      always expand it into `align-items` + `justify-items`, both of
+      which we already read via `mapAlign` / `mapJustify`.
+- [x] **Stylesheet-driven SVG `currentColor`**. `substituteCurrentColor`
+      now walks the live and cloned SVG trees in lockstep, reading the
+      live element's resolved `getComputedStyle().fill` (and friends)
+      and promoting it onto the clone when the clone has neither an
+      attribute nor an inline-style override. A `<style>.icon path {
+      fill: currentColor }` rule now round-trips.
+
 ## Phase 8 — Still on the table
 
 - [ ] Multi-image `background` stacks for `gradient + url(...)` combos
       (currently still drops the URL when a gradient layer exists).
-- [ ] SVG `currentColor` resolution from stylesheet selectors (currently
-      only attribute / inline-style references are rewritten).
-- [ ] `align-content`, `justify-self`, `place-items` longhands.
+- [ ] `justify-self` per-grid-item alignment override (currently
+      ignored; cells inherit their captured width and the row's
+      horizontal distribution).
 - [ ] Promote row-spanning cells to absolute children of the grid frame
       (instead of bailing out of restructure entirely).
 
