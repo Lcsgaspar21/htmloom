@@ -321,11 +321,14 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
   const componentName = el.getAttribute("data-figma-component");
   const padding = parsePadding(style);
   const background = parseBackground(style);
-  const gradient = parseGradient(style.backgroundImage);
+  const gradients = parseGradients(style.backgroundImage);
+  const gradient = gradients[0] ?? null;
+  const extraGradients = gradients.slice(1);
   // Skip URL parsing when a gradient was found — CSS allows both, but we
   // pick gradient as the dominant fill to keep paint stacks short.
   const backgroundImageUrl = gradient ? null : parseBackgroundImageUrl(style.backgroundImage);
   const shadows = parseShadows(style.boxShadow);
+  const aspectRatio = parseAspectRatio(style);
   const borderInfo = parseBorder(style);
   const hasDecoration =
     background !== null ||
@@ -378,8 +381,10 @@ function walk(el: HTMLElement, root: HTMLElement, path: string): CapturedNode | 
     imageSrc: kind === "IMAGE" && !componentName ? resolveImageSrc(el) : null,
     svgMarkup: kind === "IMAGE" && !componentName ? serializeInlineSvg(el) : null,
     gradient,
+    extraGradients,
     backgroundImageUrl,
     shadows,
+    aspectRatio,
     children: [],
     component: componentName ? captureComponent(el, componentName, path) : null,
     triggers: parseTriggers(el),
@@ -448,8 +453,10 @@ function synthesizeTextChild(
     imageSrc: null,
     svgMarkup: null,
     gradient: null,
+    extraGradients: [],
     backgroundImageUrl: null,
     shadows: [],
+    aspectRatio: null,
     children: [],
     component: null,
     triggers: [],
@@ -639,7 +646,19 @@ function parseMs(value: string | null): number {
 
 function parseEasing(value: string | null): TriggerEasing {
   if (!value) return "EASE_OUT";
-  const v = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const trimmed = value.trim();
+
+  // CSS-style cubic-bezier(x1, y1, x2, y2) → CUSTOM_CUBIC_BEZIER. Accepts
+  // both the original CSS value and Figma-shorthand `bezier(...)`.
+  const bezier = trimmed.match(/^(?:cubic-)?bezier\(\s*([-\d.,\s]+)\s*\)$/i);
+  if (bezier) {
+    const parts = bezier[1].split(",").map((p) => parseFloat(p.trim()));
+    if (parts.length === 4 && parts.every((n) => isFinite(n))) {
+      return { type: "CUSTOM_CUBIC_BEZIER", x1: parts[0], y1: parts[1], x2: parts[2], y2: parts[3] };
+    }
+  }
+
+  const v = trimmed.toLowerCase().replace(/[\s-]+/g, "_");
   switch (v) {
     case "linear":
       return "LINEAR";
@@ -785,6 +804,27 @@ function parseBorder(s: CSSStyleDeclaration): {
     color: dominant.color,
     sides: { top, right, bottom, left },
   };
+}
+
+/**
+ * Parses CSS `aspect-ratio` into a single `width / height` number. Browsers
+ * report values like `"16 / 9"`, `"1.5"`, or the keyword `"auto"`. Anything
+ * we can't confidently turn into a positive ratio returns null and the
+ * builder skips the Figma `targetAspectRatio` assignment.
+ */
+function parseAspectRatio(s: CSSStyleDeclaration): number | null {
+  const raw = s.getPropertyValue("aspect-ratio");
+  if (!raw) return null;
+  const value = raw.trim().toLowerCase();
+  if (!value || value === "auto" || value === "none") return null;
+  // CSS allows the slash form as well as a single number.
+  const slash = value.split("/").map((part) => parseFloat(part.trim()));
+  if (slash.length === 2 && isFinite(slash[0]) && isFinite(slash[1]) && slash[1] > 0) {
+    return slash[0] / slash[1];
+  }
+  const single = parseFloat(value);
+  if (isFinite(single) && single > 0) return single;
+  return null;
 }
 
 function rgbaEquals(a: RGBA | null, b: RGBA | null): boolean {
@@ -1075,6 +1115,29 @@ function parseGradient(backgroundImage: string | null | undefined): Gradient | n
   if (extracted.name === "linear-gradient") return parseLinear(extracted.body);
   if (extracted.name === "radial-gradient") return parseRadial(extracted.body);
   return null;
+}
+
+/**
+ * CSS `background-image` allows multiple comma-separated layers
+ * (`linear-gradient(...), radial-gradient(...), url(...)`). This walks
+ * each top-level layer and returns the gradients it can parse, keeping
+ * the original CSS order (first = top-most). URL layers are ignored
+ * here — they go through `parseBackgroundImageUrl`.
+ */
+function parseGradients(backgroundImage: string | null | undefined): Gradient[] {
+  if (!backgroundImage || backgroundImage === "none") return [];
+  const layers = splitTopLevelCommas(backgroundImage);
+  const out: Gradient[] = [];
+  for (const layer of layers) {
+    const trimmed = layer.trim();
+    const extracted = extractFirstFunction(trimmed);
+    if (!extracted) continue;
+    let gradient: Gradient | null = null;
+    if (extracted.name === "linear-gradient") gradient = parseLinear(extracted.body);
+    else if (extracted.name === "radial-gradient") gradient = parseRadial(extracted.body);
+    if (gradient) out.push(gradient);
+  }
+  return out;
 }
 
 /**
@@ -1582,8 +1645,10 @@ function synthesiseRowFrame(
     imageSrc: null,
     svgMarkup: null,
     gradient: null,
+    extraGradients: [],
     backgroundImageUrl: null,
     shadows: [],
+    aspectRatio: null,
     children: cells,
     component: null,
     triggers: [],

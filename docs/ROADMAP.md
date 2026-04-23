@@ -309,17 +309,56 @@ Tracks scope per phase. Each phase ends with a published version on Figma Commun
   usually works because both variants come from the same authored
   template.
 
-## Phase 8 — On the table
+## Phase 7.1 — Tangential ports from Builder.io ✓
 
-- [ ] Multi-image `background` stacks (currently only the first layer
-      wins, both for stacked gradients and for gradient + URL combos).
+- [x] Per-side borders → 4 absolutely-positioned rectangles with edge
+      constraints (`border-bottom: 1px solid`, left-accent callouts,
+      table row separators). Uniform borders still use Figma `strokes`.
+- [x] SVG sprite `<use href="#sym">` inlining (preprocessing step).
+- [x] SVG outerHTML pass-through for `data:image/svg+xml` and `*.svg`
+      URLs — go through `createNodeFromSvgAsync` as crisp vectors
+      instead of being rasterised.
+
+## Phase 7.2 — AL chain debug ✓
+
+- [x] Root cause of cards-not-growing: `getComputedStyle().height`
+      always resolves CSS `height: auto` to a used px value. Our
+      `axisHasExplicitSize` was reading every block as FIXED-height.
+      `isHeightImplicit` rescue in `walker.ts` flips back to HUG when
+      the author wrote no inline height and no `max-height`.
+      `min-height` coexists with HUG (CSS floor semantics).
+- [x] `applyTextSizing` respects `widthMode`: HUG-text uses
+      `WIDTH_AND_HEIGHT`, FILL/FIXED-text uses `HEIGHT` and re-wraps
+      after `setLayoutSizing(FILL)`.
+
+## Phase 8 — Quick wins ✓ (partial)
+
+- [x] **CSS `aspect-ratio` → Figma's `targetAspectRatio`**. Authored
+      values like `aspect-ratio: 16/9` map to `{ width: 1.7778, height:
+      1 }` and Figma keeps the ratio when the frame is resized in
+      either axis. Skipped silently on older runtimes.
+- [x] **Custom cubic-bezier easing**. CSS `cubic-bezier(x1, y1, x2,
+      y2)` (and the shorthand `bezier(...)`) lands on
+      `CUSTOM_CUBIC_BEZIER` with the captured control points. Authored
+      via `data-figma-trigger-easing` or per-trigger inline syntax
+      (`open@320ms:cubic-bezier(0.22, 1, 0.36, 1)`).
+- [x] **Multi-image `background` stacks** for stacked gradients
+      (`background: linear-gradient(...), radial-gradient(...)`). Each
+      layer becomes a Figma fill in the correct paint order (CSS-first
+      = top-most). URL layers stacked with gradients still take the
+      single-URL path.
+- [x] `examples/phase8-quickwins.html` — 16:9 banner, stacked radial
+      overlay over linear gradient, animated reveal with `easeOutExpo`
+      and `Material standard` cubic-bezier curves.
+
+## Phase 8 — Still on the table
+
+- [ ] Multi-image `background` stacks for `gradient + url(...)` combos
+      (currently still drops the URL when a gradient layer exists).
 - [ ] SVG `currentColor` resolution from stylesheet selectors (currently
       only attribute / inline-style references are rewritten).
-- [ ] CSS `aspect-ratio` → Figma's `targetAspectRatio`.
 - [ ] `align-content`, `justify-self`, `place-items` longhands.
 - [ ] Grid spanning cells (`grid-row: span N`, `grid-column: span N`).
-- [ ] Custom Bezier easing — Figma's `CUSTOM_BEZIER` accepts a control
-      polygon; map a CSS `cubic-bezier(...)` directly.
 
 ## Phase 1 limits exposed by Phase 2 testing
 

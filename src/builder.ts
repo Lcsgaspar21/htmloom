@@ -192,6 +192,7 @@ async function buildFrame(
   }
 
   applyMinMax(frame, node.sizing);
+  applyAspectRatio(frame, node);
 
   for (const child of node.children) {
     const built = await createNodeFor(child, false, ctx);
@@ -412,6 +413,25 @@ function applyContainerOwnHug(frame: FrameNode, node: CapturedNode): void {
   }
 }
 
+/**
+ * Maps captured CSS `aspect-ratio` to Figma's `targetAspectRatio`. Both
+ * properties express width÷height; when set, Figma keeps the ratio while
+ * resizing in either axis. Skipped silently on runtimes that don't expose
+ * the field (older plugin runtimes).
+ */
+function applyAspectRatio(node: SceneNode, source: CapturedNode): void {
+  if (source.aspectRatio === null || source.aspectRatio <= 0) return;
+  if (!("targetAspectRatio" in node)) return;
+  try {
+    (node as unknown as { targetAspectRatio: { width: number; height: number } }).targetAspectRatio = {
+      width: source.aspectRatio,
+      height: 1,
+    };
+  } catch {
+    // Older Figma runtimes ignore targetAspectRatio — silently skip.
+  }
+}
+
 function applyMinMax(node: SceneNode, sizing: SizingIntent): void {
   const set = (key: "minWidth" | "maxWidth" | "minHeight" | "maxHeight", value: number | null) => {
     if (value === null) return;
@@ -581,7 +601,7 @@ function buildReaction(trigger: TriggerSpec, destinationId: string): Reaction {
   const transition: Transition | null = trigger.durationMs > 0
     ? ({
         type: "SMART_ANIMATE",
-        easing: { type: trigger.easing },
+        easing: buildEasingFunction(trigger.easing),
         duration: trigger.durationMs / 1000,
       } as unknown as Transition)
     : null;
@@ -597,6 +617,24 @@ function buildReaction(trigger: TriggerSpec, destinationId: string): Reaction {
       } as Action,
     ],
   } as Reaction;
+}
+
+/**
+ * Translates a captured easing into Figma's `EasingFunction` shape.
+ * Keyword presets (LINEAR, EASE_OUT, GENTLE, ...) map directly. CSS
+ * `cubic-bezier(...)` lands on `CUSTOM_CUBIC_BEZIER` with the captured
+ * control points. Falls back to EASE_OUT on unknown shapes so a typo in
+ * an authored value doesn't break the import.
+ */
+function buildEasingFunction(easing: TriggerSpec["easing"]): { type: string; easingFunctionCubicBezier?: { x1: number; y1: number; x2: number; y2: number } } {
+  if (typeof easing === "string") return { type: easing };
+  if (easing && typeof easing === "object" && easing.type === "CUSTOM_CUBIC_BEZIER") {
+    return {
+      type: "CUSTOM_CUBIC_BEZIER",
+      easingFunctionCubicBezier: { x1: easing.x1, y1: easing.y1, x2: easing.x2, y2: easing.y2 },
+    };
+  }
+  return { type: "EASE_OUT" };
 }
 
 /**
@@ -808,6 +846,14 @@ async function applyVisuals(
   const fills: Paint[] = [];
   if (source.background) {
     fills.push(bindSolid(source.background, ctx, source.tokenBindings.background));
+  }
+  // Stacked CSS gradients: the FIRST listed paints on top in CSS, but
+  // Figma renders the LAST entry of `fills` on top — so we push extras
+  // in reverse first, then the primary gradient last (top-most).
+  if (source.extraGradients.length > 0) {
+    for (let i = source.extraGradients.length - 1; i >= 0; i--) {
+      fills.push(buildGradientPaint(source.extraGradients[i], source.box.width, source.box.height));
+    }
   }
   if (source.gradient) {
     fills.push(buildGradientPaint(source.gradient, source.box.width, source.box.height));

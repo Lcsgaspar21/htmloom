@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>HTMLoom — Phase 8 quick wins</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --line: #334155;
+      --ink-100: #f1f5f9;
+      --ink-300: #cbd5e1;
+      --ink-500: #94a3b8;
+      --brand-300: #93c5fd;
+      --brand-500: #3b82f6;
+      --brand-700: #1d4ed8;
+      --warn: #f59e0b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px;
+      font: 14px/1.5 system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink-100);
+    }
+    h1 { font-size: 18px; margin: 0 0 8px; color: var(--ink-100); }
+    h2 { font-size: 13px; margin: 24px 0 8px; color: var(--ink-500); font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
+    .stack { display: flex; flex-direction: column; gap: 16px; max-width: 560px; margin: 0 auto; }
+    .row { display: flex; gap: 16px; }
+    .row > * { flex: 1; }
+
+    /* CASE 1 — aspect-ratio: a 16:9 banner that keeps its proportion when
+       the user resizes either axis inside Figma. */
+    .video-card {
+      aspect-ratio: 16 / 9;
+      background: linear-gradient(135deg, var(--brand-700), var(--brand-300));
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--ink-100);
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    /* CASE 2 — square (1:1) with a stacked background:
+       a tinted radial overlay sits ON TOP of a base linear gradient. */
+    .square-stack {
+      aspect-ratio: 1;
+      border-radius: 16px;
+      background:
+        radial-gradient(ellipse at top right, rgba(245, 158, 11, 0.55), rgba(245, 158, 11, 0)),
+        linear-gradient(180deg, var(--brand-700), #0f172a);
+      padding: 20px;
+      display: flex;
+      align-items: flex-end;
+      color: var(--ink-100);
+      font-weight: 500;
+    }
+
+    /* CASE 3 — animated card with a custom cubic-bezier easing.
+       The CSS transition is purely informational — we're showing that
+       Figma's prototype reaction picks up the bezier curve. */
+    .reveal {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .reveal[data-figma-component="reveal"][data-figma-variant="closed"] {
+      max-height: 80px;
+      overflow: hidden;
+    }
+    .reveal[data-figma-component="reveal"][data-figma-variant="open"] {
+      display: none; /* hidden in HTML preview; HTMLoom force-shows variants */
+    }
+    .reveal h3 { margin: 0; font-size: 14px; font-weight: 600; }
+    .reveal p { margin: 0; color: var(--ink-300); }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--ink-100);
+      font-size: 12px;
+      border: 1px solid var(--line);
+    }
+  </style>
+</head>
+<body>
+  <div class="stack">
+    <h1>Phase 8 quick wins</h1>
+
+    <h2>1 — aspect-ratio (16:9 banner)</h2>
+    <div class="video-card">16 : 9</div>
+
+    <h2>2 — Stacked background (radial overlay over linear)</h2>
+    <div class="row">
+      <div class="square-stack">1 : 1</div>
+      <div class="square-stack" style="background: linear-gradient(45deg, var(--warn), var(--brand-500)), radial-gradient(circle at center, rgba(255,255,255,0.25), rgba(255,255,255,0));">
+        Mixed
+      </div>
+    </div>
+
+    <h2>3 — Animated reveal with custom cubic-bezier</h2>
+    <div
+      class="reveal"
+      data-figma-component="reveal"
+      data-figma-variant="closed"
+      data-figma-on-click="open"
+      data-figma-trigger-duration="320ms"
+      data-figma-trigger-easing="cubic-bezier(0.22, 1, 0.36, 1)"
+    >
+      <h3>Click to expand</h3>
+      <p>(closed state)</p>
+    </div>
+
+    <div
+      class="reveal"
+      data-figma-component="reveal"
+      data-figma-variant="open"
+      data-figma-on-click="closed@180ms:cubic-bezier(0.4, 0, 0.2, 1)"
+    >
+      <h3>Click to collapse</h3>
+      <p>This open state has more content. The opening transition uses the
+        easeOutExpo curve (0.22, 1, 0.36, 1), and the closing transition
+        uses Material's standard ease (0.4, 0, 0.2, 1) via the inline
+        per-trigger override syntax.</p>
+      <span class="pill">cubic-bezier(0.4, 0, 0.2, 1)</span>
+    </div>
+  </div>
+</body>
+</html>

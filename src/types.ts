@@ -154,12 +154,26 @@ export type TriggerEvent =
  * easing types so authors can pick a curve via `data-figma-trigger-easing`
  * without remembering the all-caps API names.
  */
+/**
+ * Authored cubic-bezier control points (mirrors CSS `cubic-bezier(x1, y1,
+ * x2, y2)`). The builder converts this into Figma's CUSTOM_CUBIC_BEZIER
+ * easing function and slots it onto the matching prototype reaction.
+ */
+export interface CustomBezierEasing {
+  type: "CUSTOM_CUBIC_BEZIER";
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
 export type TriggerEasing =
   | "LINEAR"
   | "EASE_IN"
   | "EASE_OUT"
   | "EASE_IN_AND_OUT"
-  | "GENTLE";
+  | "GENTLE"
+  | CustomBezierEasing;
 
 export interface TriggerSpec {
   event: TriggerEvent;
@@ -215,12 +229,25 @@ export interface CapturedNode {
    * and lets users tweak paths/colours after import.
    */
   svgMarkup: string | null;
-  /** Linear or radial gradient parsed from `background-image`. */
+  /** First (top-most in CSS) linear or radial gradient parsed from `background-image`. */
   gradient: Gradient | null;
+  /**
+   * Additional gradient layers when the `background-image` value stacks
+   * several gradients (`background: linear-gradient(...), radial-gradient(...)`).
+   * Builder pushes them as extra Figma fills in the correct paint order
+   * (CSS-first = top-most in Figma's fill stack).
+   */
+  extraGradients: Gradient[];
   /** URL from `background-image: url(...)` on a non-img element; layers above gradient/solid. */
   backgroundImageUrl: string | null;
   /** Multi-layer CSS box-shadows mapped to Figma effects. */
   shadows: Shadow[];
+  /**
+   * CSS `aspect-ratio` value as `width / height` (e.g. 16/9 → 1.7778).
+   * Mapped to Figma's `targetAspectRatio` so the frame keeps the ratio
+   * when resized in either axis. `null` when not declared.
+   */
+  aspectRatio: number | null;
   children: CapturedNode[];
   /**
    * Set when the source element carried `data-figma-component`. The builder
